@@ -10,6 +10,8 @@
 #          - 室名を図面に合わせて修正（2F テラス→出会いホール 等）
 #  STEP C  その他の室構成を図面に合わせる（間仕切の撤去・追加、扉、室名、床仕上、
 #          2F 出会いホールの床・天井、3F 展望テラスの範囲と手摺）
+#  STEP D  天井高さ（ふところ850＋スラブ300）、3F 天井の新設、天井ふところの外周を塞ぐ、
+#          妻面の壁をガラスから土壁へ（何度でも再実行可。PLENUM を変えれば天井を作り直す）
 #  STEP B  階ごとのタグ（レイヤー）を作成し、全要素を 1F/2F/3F/RF/複数階 に振り分け
 #          - 既存の「部位別タグ」（01_構造… 等）は親グループ側に残すので、
 #            部位別・階別のどちらでも表示/非表示を切り替えられる
@@ -19,10 +21,11 @@
 #   2. [拡張機能]→[Ruby コンソール] を開き、次を入力して Enter
 #        load 'C:/temp/tomita_fix_20261005.rb'
 #      ※ このファイルは日本語を含まないフォルダ（例: C:/temp）に置くと確実です
-#      （このファイルを読み込むと STEP A → STEP C → STEP B の順で自動実行されます）
+#      （このファイルを読み込むと STEP A → C → D → B の順で自動実行されます。
+#        実行済みの STEP A・C は自動でスキップします）
 #      個別に実行したい場合は、先頭の AUTO_RUN を false にして読み込み後に
-#        TomitaFix.step_a_south_void / TomitaFix.step_c_rooms / TomitaFix.step_b_floor_tags
-#   3. 結果が気に入らなければ [編集]→[元に戻す] を3回（STEP B → C → A の順）で元に戻ります
+#        TomitaFix.step_a_south_void / step_c_rooms / step_d_ceilings / step_b_floor_tags
+#   3. 結果が気に入らなければ [編集]→[元に戻す] を、実行された STEP の数だけ押すと元に戻ります
 #
 # 座標の根拠（すべて mm、モデル原点 = 通り芯 X0/Y0・1FL±0、X=東、Y=北）:
 #   - モデル内に取り込まれている「20260918_複合施設プラン検討案 for su01.dwg」の
@@ -256,7 +259,7 @@ module TomitaFix
   # ===========================================================================
   def step_a_south_void
     if model.get_attribute(MARK_DICT, 'south_void_done')
-      UI.messagebox('STEP A は既に実行済みです（二重実行を防止しました）。')
+      puts 'STEP A は実行済みのためスキップしました。'
       return
     end
     model.start_operation('南側吹抜け・南東階段の追加', true)
@@ -646,7 +649,7 @@ module TomitaFix
 
   def step_c_rooms
     if model.get_attribute(MARK_DICT, 'rooms_done')
-      UI.messagebox('STEP C は既に実行済みです（二重実行を防止しました）。')
+      puts 'STEP C は実行済みのためスキップしました。'
       return
     end
     model.start_operation('室構成・間仕切を図面に合わせる', true)
@@ -802,6 +805,105 @@ module TomitaFix
   end
 
   # ===========================================================================
+  # STEP D: 天井（1F・2F の高さ変更、3F 新設）、天井ふところの塞ぎ、妻面の材料
+  #   天井高さ = 上階 FL − スラブ 300 − 天井ふところ PLENUM
+  #   PLENUM を 800〜900 の範囲で変えて再実行すると、天井と塞ぎを作り直す（何度でも実行可）
+  # ===========================================================================
+  PLENUM = 850.0
+  SLAB_T = 300.0
+  UPPER_FL = { '1F' => 5000.0, '2F' => 9500.0, '3F' => 14000.0 }.freeze # 3F は大屋根の桁上端
+  # 天井の範囲（外壁の内面、mm）。吹抜け（西側 1F〜大屋根、南側 1F〜2F）と階段は切り欠き
+  CEIL_POLY = {
+    '1F' => [[4_950, -50], [15_950, -50], [15_950, 5_650], [37_250, 5_650], [37_250, 37_950], [31_350, 37_950],
+             [31_350, 40_850], [25_250, 40_850], [25_250, 56_750], [-50, 56_750], [-50, 44_950], [13_450, 44_950],
+             [13_450, 27_150], [4_950, 27_150], [4_950, 16_850], [7_850, 16_850], [7_850, 10_850], [4_950, 10_850]],
+    '2F' => [[4_950, -50], [37_250, -50], [37_250, 37_950], [31_350, 37_950],
+             [31_350, 40_850], [25_250, 40_850], [25_250, 56_750], [-50, 56_750], [-50, 44_950], [13_450, 44_950],
+             [13_450, 27_150], [4_950, 27_150], [4_950, 16_850], [7_850, 16_850], [7_850, 10_850], [4_950, 10_850]],
+    '3F' => [[4_950, 10_950], [37_250, 10_950], [37_250, 40_850], [25_250, 40_850], [25_250, 56_750], [-50, 56_750],
+             [-50, 44_950], [13_450, 44_950], [13_450, 27_150], [4_950, 27_150]]
+  }.freeze
+  SEAL_T = 20.0
+  GABLE_GROUP = '妻面 ガラス・土壁'.freeze
+
+  def ceil_z(fl)
+    UPPER_FL[fl] - SLAB_T - PLENUM
+  end
+
+  def step_d_ceilings
+    model.start_operation('天井の高さ・3F天井・天井ふところ塞ぎ・妻面材料', true)
+    log = []
+    host, htr = find_one('内装 床仕上・天井')
+    unique!(host)
+    hents = host.definition.entities
+    ceil_mat = mat_prefix('41_')
+    %w[1F 2F 3F].each do |fl|
+      z = ceil_z(fl)
+      # --- 天井面（既存の 1F/2F 天井は作り直し、3F は新設） ---
+      g = hents.find { |e| e.is_a?(Sketchup::Group) && e.name == "#{fl} 天井" }
+      if g
+        unique!(g)
+        g.definition.entities.clear!
+      else
+        g = hents.add_group
+        g.name = "#{fl} 天井"
+      end
+      g.transformation = htr.inverse
+      f = g.entities.add_face(CEIL_POLY[fl].map { |x, y| pt(x, y, z) })
+      if f
+        f.reverse! if f.normal.z > 0 # 下から見える向き
+        f.material = ceil_mat
+        f.back_material = ceil_mat
+      end
+      # --- 天井ふところの塞ぎ（天井の外周すべて: 外壁側・吹抜け側・階段側） ---
+      old = hents.select { |e| e.is_a?(Sketchup::Group) && e.name == "天井ふところ塞ぎ #{fl}" }
+      hents.erase_entities(old) unless old.empty?
+      sg = hents.add_group
+      sg.name = "天井ふところ塞ぎ #{fl}"
+      sg.transformation = htr.inverse
+      poly = CEIL_POLY[fl]
+      area2 = poly.each_with_index.sum { |(x0, y0), i| x1, y1 = poly[(i + 1) % poly.size]; x0 * y1 - x1 * y0 }
+      poly = poly.reverse if area2 < 0 # 反時計回りにそろえる（内側＝左手）
+      ztop = fl == '3F' ? 13_700.0 : UPPER_FL[fl] - SLAB_T # スラブ下端（3F は外壁ガラス上端）
+      poly.each_with_index do |(x0, y0), i|
+        x1, y1 = poly[(i + 1) % poly.size]
+        len = Math.hypot(x1 - x0, y1 - y0)
+        next if len < 1.0
+        nx = -(y1 - y0) / len * SEAL_T
+        ny = (x1 - x0) / len * SEAL_T
+        q = [pt(x0, y0, z), pt(x1, y1, z), pt(x1 + nx, y1 + ny, z), pt(x0 + nx, y0 + ny, z)]
+        prism(sg.entities, q, Geom::Vector3d.new(0, 0, (ztop - z).mm), ceil_mat)
+      end
+      log << "#{fl} 天井 FL+#{(z - (fl == '1F' ? 0 : fl == '2F' ? 5000 : 9500)).round}（z=#{z.round}）、ふところ塞ぎ z#{z.round}〜#{ztop.round}"
+    end
+
+    # --- 妻面の壁: ガラス → 土壁 ---
+    hits = find_named(GABLE_GROUP)
+    if hits.empty?
+      log << "（スキップ）「#{GABLE_GROUP}」なし"
+    else
+      g, = hits.first
+      unique!(g)
+      earth = mat_prefix('03_外壁_生成り土壁')
+      n = 0
+      g.definition.entities.grep(Sketchup::Face).each do |f|
+        f.material = earth
+        f.back_material = earth
+        n += 1
+      end
+      log << "妻面の壁 #{n}面を土壁に変更"
+    end
+
+    model.commit_operation
+    puts "[STEP D 完了] 天井ふところ #{PLENUM.round}mm + スラブ #{SLAB_T.round}mm\n  " + log.join("\n  ")
+    log
+  rescue StandardError => e
+    model.abort_operation
+    UI.messagebox("STEP D でエラーのため中止しました（モデルは変更されていません）:\n#{e.message}")
+    raise
+  end
+
+  # ===========================================================================
   # STEP B: 階別タグ
   # ===========================================================================
   def floor_tag_layers
@@ -914,9 +1016,10 @@ module TomitaFix
   def run_all
     step_a_south_void
     step_c_rooms
+    step_d_ceilings
     step_b_floor_tags
     UI.messagebox("修正が完了しました。\n詳細は Ruby コンソールのログを確認してください。\n" \
-                  "元に戻す場合は [編集]→[元に戻す] を3回（STEP B→C→A）。")
+                  "元に戻す場合は [編集]→[元に戻す] を、実行された STEP の数だけ押してください。")
   end
 end
 
