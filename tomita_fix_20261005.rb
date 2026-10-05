@@ -47,7 +47,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-05 v7（STEP A/C/D/E/F/G/B）'.freeze
+  VERSION = '2026-10-05 v7.1（STEP A/C/D/E/F/G/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -921,12 +921,36 @@ module TomitaFix
     out
   end
 
+  CEIL_HOST_NAME = '内装 床仕上・天井'.freeze
+
+  # 天井グループを入れる場所（entities と、その座標系の world 変換）を探す
+  #   1) グループ「内装 床仕上・天井」
+  #   2) それが無い場合（分解・名前変更など）は、既存の「1F 天井」等が入っている場所
+  #   3) どれも無い場合は、モデル直下に「内装 床仕上・天井」を新しく作る
+  def ceiling_host(log)
+    host, htr = find_named(CEIL_HOST_NAME).first
+    if host
+      unique!(host)
+      return [host.definition.entities, htr]
+    end
+    names = %w[1F 2F 3F].flat_map { |fl| ["#{fl} 天井", "天井ルーバー #{fl}", "天井ふところ塞ぎ #{fl}"] }
+    names.each do |nm|
+      e, t = find_named(nm).first
+      next unless e
+      log << "（注意）グループ「#{CEIL_HOST_NAME}」が無いため、「#{nm}」と同じ場所に天井を作ります"
+      par = e.parent # ComponentDefinition または Model
+      return [par.respond_to?(:entities) ? par.entities : par, t * e.transformation.inverse]
+    end
+    g = model.entities.add_group
+    g.name = CEIL_HOST_NAME
+    log << "（注意）グループ「#{CEIL_HOST_NAME}」が無いため、モデル直下に新しく作りました"
+    [g.entities, Geom::Transformation.new]
+  end
+
   def step_d_ceilings
     model.start_operation('天井の高さ・3F天井・天井ふところ塞ぎ・妻面材料', true)
     log = []
-    host, htr = find_one('内装 床仕上・天井')
-    unique!(host)
-    hents = host.definition.entities
+    hents, htr = ceiling_host(log)
     dark = new_mat(:dark)
     oak = new_mat(:board)
     ubox = unit_box_def
@@ -1282,8 +1306,8 @@ module TomitaFix
     map[glass] = mesh if glass
     map[cap] = steel if cap
     targets = find_named('南東階段 手摺').map(&:first) + find_named('南側吹抜け 手摺(2F)').map(&:first)
-    ext, etr = find_one('外部階段 (1F→2F) ・ 歩道橋接続')
-    ext.definition.entities.each do |e|
+    ext, etr = find_named('外部階段 (1F→2F) ・ 歩道橋接続').first
+    (ext ? ext.definition.entities : []).each do |e|
       next unless container?(e)
       mn, mx = world_bb_mm(e, etr)
       targets << e if mn && mn[0] >= 4_900 && mx[0] <= 13_500 && mn[1] >= 27_100 && mx[1] <= 44_960 && mn[2] >= 4_990
