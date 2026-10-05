@@ -15,6 +15,7 @@
 #  STEP E  鉄骨化（柱・梁・サッシの材料、梁・垂木を H形鋼形状に）、軒（薄い金属屋根・鉄骨垂木）、
 #          吹抜けの手摺（エキスパンドメタル調）、家具の配置（田園調布せせらぎ館を参考）
 #  STEP F  軒と屋根（大屋根は薄い屋根板＋細い垂木＋面戸、下屋は小さな持ち出し材とシャンパングレーの鉄骨）
+#  STEP G  屋根まわりの鉄骨（妻側の登り梁を木製に、南北の軒の桁・登り梁を柱の内面より奥へ）
 #  STEP B  階ごとのタグ（レイヤー）を作成し、全要素を 1F/2F/3F/RF/複数階 に振り分け
 #          - 既存の「部位別タグ」（01_構造… 等）は親グループ側に残すので、
 #            部位別・階別のどちらでも表示/非表示を切り替えられる
@@ -24,10 +25,11 @@
 #   2. [拡張機能]→[Ruby コンソール] を開き、次を入力して Enter
 #        load 'C:/temp/tomita_fix_20261005.rb'
 #      ※ このファイルは日本語を含まないフォルダ（例: C:/temp）に置くと確実です
-#      （このファイルを読み込むと STEP A → C → D → E → F → B の順で自動実行されます。
+#      （このファイルを読み込むと STEP A → C → D → E → F → G → B の順で自動実行されます。
 #        実行済みの STEP A・C は自動でスキップします）
 #      個別に実行したい場合は、先頭の AUTO_RUN を false にして読み込み後に
-#        TomitaFix.step_a_south_void / step_c_rooms / step_d_ceilings / step_e_steel / step_f_roof / step_b_floor_tags
+#        TomitaFix.step_a_south_void / step_c_rooms / step_d_ceilings / step_e_steel / step_f_roof /
+#        step_g_roof_steel / step_b_floor_tags
 #   3. 結果が気に入らなければ [編集]→[元に戻す] を、実行された STEP の数だけ押すと元に戻ります
 #
 # 座標の根拠（すべて mm、モデル原点 = 通り芯 X0/Y0・1FL±0、X=東、Y=北）:
@@ -45,7 +47,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-05 v6（STEP A/C/D/E/F/B）'.freeze
+  VERSION = '2026-10-05 v7（STEP A/C/D/E/F/G/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -1605,6 +1607,164 @@ module TomitaFix
   end
 
   # ===========================================================================
+  # STEP G: 屋根まわりの鉄骨の見え方
+  #   ・妻側（ケラバ）の登り梁は装飾材のため、木製の角材（05 木地）にする
+  #   ・南北の軒で柱より外に出ている H形鋼を、柱の内面より奥へ下げる
+  #       南: 桁（大屋根の桁とその下の梁）を柱の内面 Y=250 の奥へ移動し、
+  #           登り梁・繋ぎ梁の南端を Y=250 で切る
+  #       北: 登り梁の北端を柱の内面 Y=56,450 で切る
+  #   ・軒の出（柱より外）は STEP F の細い垂木と面戸だけが見える
+  #   ・何度実行しても同じ結果になる（移動・切断済みの部材は変更しない）
+  # ===========================================================================
+  SOUTH_HIDE_Y = 250.0      # 南側の柱（□500、芯 Y0）の内面
+  NORTH_HIDE_Y = 56_450.0   # 北側の柱（□500、芯 Y56,700）の内面
+  VERGE_X = [-300.0, 37_500.0].freeze # この範囲より外（妻壁の外）にある登り梁が妻側の装飾材
+  ROOF_EDGE_X = [-850.0, 38_050.0].freeze # 大屋根の妻側の端（ケラバ）
+  VERGE_W = 150.0           # 妻側の木の登り梁の幅（ケラバの端に揃える）
+  ROOF_STEEL_Z = 12_000.0   # これより高い部材だけを対象にする（下屋の 1F 部分は対象外）
+  ROOF_MEMBER_GROUPS = ['大屋根 桁・梁', '大屋根 棟木・登り梁', '下屋 繋ぎ梁・垂木'].freeze
+
+  # 部材グループ（角材または H形鋼の押し出し形状）の両端面を world 座標で返す
+  #   戻り値: [端面Aの点列, 端面Bの中心 - 端面Aの中心（長さベクトル）, 材料]
+  def member_ends(grp, wtr)
+    ents = grp.definition.entities
+    faces = ents.grep(Sketchup::Face)
+    return nil if faces.size < 6 || ents.any? { |e| container?(e) }
+    longest = ents.grep(Sketchup::Edge).max_by { |e| e.vertices[0].position.distance(e.vertices[1].position) }
+    return nil unless longest
+    axis = longest.vertices[0].position.vector_to(longest.vertices[1].position).transform(wtr)
+    axis.normalize!
+    # 端面は長さ方向の成分を持つ面（鉛直に切った登り梁の端面も含む）。側面は長さ方向に直交する
+    ends = faces.select { |f| f.normal.transform(wtr).normalize!.dot(axis).abs > 0.5 }
+    return nil unless ends.size == 2
+    a, b = ends.map { |f| f.outer_loop.vertices.map { |v| v.position.transform(wtr) } }
+    ca = centroid(a)
+    cb = centroid(b)
+    [a, ca.vector_to(cb), ends[0].material]
+  end
+
+  def centroid(pts)
+    n = pts.size.to_f
+    Geom::Point3d.new(pts.sum(&:x) / n, pts.sum(&:y) / n, pts.sum(&:z) / n)
+  end
+
+  def scale_vec(v, s)
+    Geom::Vector3d.new(v.x * s, v.y * s, v.z * s)
+  end
+
+  # 端面の点列 pts（world）と長さベクトル lv（world）で部材を作り直す
+  def rebuild_member(grp, wtr, pts, lv, material)
+    inv = wtr.inverse
+    ents = grp.definition.entities
+    ents.clear!
+    prism(ents, pts.map { |p| p.transform(inv) }, lv.transform(inv), material)
+  end
+
+  # 端面 pts を、幅方向（水平）×せい方向の外形の長方形に置き換える
+  #   x_span: [x0, x1]（mm）を指定すると幅をその範囲に合わせる。rise: 上端を鉛直にかさ上げする量（mm）
+  def envelope_rect(pts, lv, x_span = nil, rise = 0.0)
+    nrm = Geom::Vector3d.new(0, 0, 0)
+    pts.each_with_index do |a, i|
+      b = pts[(i + 1) % pts.size]
+      nrm.x += (a.y - b.y) * (a.z + b.z)
+      nrm.y += (a.z - b.z) * (a.x + b.x)
+      nrm.z += (a.x - b.x) * (a.y + b.y)
+    end
+    nrm.normalize!
+    wu = lv.cross(Geom::Vector3d.new(0, 0, 1))
+    wu.normalize!
+    du = nrm.cross(wu)
+    du.normalize!
+    du.reverse! if du.z < 0
+    o = pts[0]
+    ws = pts.map { |p| o.vector_to(p).dot(wu) }
+    ds = pts.map { |p| o.vector_to(p).dot(du) }
+    w0, w1 = ws.minmax
+    w0, w1 = x_span.map { |x| (x.mm - o.x) / wu.x }.minmax if x_span && wu.x.abs > 0.99
+    d0, d1 = ds.minmax
+    d1 += rise.mm / du.z if du.z > 0.1
+    [[w0, d0], [w1, d0], [w1, d1], [w0, d1]].map do |w, d|
+      o.offset(scale_vec(wu, w) + scale_vec(du, d))
+    end
+  end
+
+  def step_g_roof_steel
+    model.start_operation('屋根まわりの鉄骨（妻側を木製に、南北の梁を柱の奥へ）', true)
+    log = []
+    wood = mat_prefix('05_木格子') || mat_prefix('05_')
+    raise '材料「05_」（木地）が見つかりません' unless wood
+    verge = 0
+    shifted = 0
+    trimmed = 0
+    ROOF_MEMBER_GROUPS.each do |gname|
+      find_named(gname).each do |g, gtr|
+        unique!(g)
+        g.definition.entities.grep(Sketchup::Group).to_a.each do |m|
+          wtr = gtr * m.transformation
+          info = member_ends(m, wtr)
+          next unless info
+          pts, lv, mat = info
+          pb = pts.map { |p| p.offset(lv) }
+          all = pts + pb
+          xs = all.map { |p| p.x.to_mm }
+          ys = all.map { |p| p.y.to_mm }
+          zs = all.map { |p| p.z.to_mm }
+          next if zs.min < ROOF_STEEL_Z
+          len_y = lv.y.to_mm
+          along_y = len_y.abs > lv.x.to_mm.abs
+
+          # --- G1. 妻側の登り梁 → 木製の角材 ---
+          if gname == '大屋根 棟木・登り梁' && (xs.max < VERGE_X[0] || xs.min > VERGE_X[1])
+            next if m.definition.entities.grep(Sketchup::Face).size == 6 && mat == wood
+            unique!(m)
+            # 幅 150 でケラバの端に揃え、上端は屋根板の下面まで（STEP F で屋根板を薄くした分 300 をかさ上げ）
+            span = xs.max < VERGE_X[0] ? [ROOF_EDGE_X[0], ROOF_EDGE_X[0] + VERGE_W] : [ROOF_EDGE_X[1] - VERGE_W, ROOF_EDGE_X[1]]
+            rebuild_member(m, wtr, envelope_rect(pts, lv, span, ROOF_OLD_T - ROOF_NEW_T), lv, wood)
+            m.material = nil
+            verge += 1
+            next
+          end
+
+          # --- G2. 南の桁（X方向の材）を柱の内面の奥へ移動 ---
+          if !along_y && ys.max <= SOUTH_HIDE_Y + 1 && ys.min >= -400
+            dy = SOUTH_HIDE_Y - ys.min
+            mv = Geom::Transformation.translation(Geom::Vector3d.new(0, dy.mm, 0))
+            m.transformation = gtr.inverse * mv * gtr * m.transformation
+            shifted += 1
+            next
+          end
+
+          # --- G3. Y方向の材の南端・北端を柱の内面で切る ---
+          next unless along_y
+          if len_y < 0
+            pts = pb
+            lv = lv.reverse
+            len_y = -len_y
+          end
+          ya = pts.map { |p| p.y.to_mm }.min           # 南端（端面の最も外側）
+          yb = pts.map { |p| p.offset(lv).y.to_mm }.max # 北端
+          s0 = ya < SOUTH_HIDE_Y - 1 && yb > SOUTH_HIDE_Y + 100 ? (SOUTH_HIDE_Y - ya) / len_y : 0.0
+          s1 = yb > NORTH_HIDE_Y + 1 && ya < NORTH_HIDE_Y - 100 ? (yb - NORTH_HIDE_Y) / len_y : 0.0
+          next if s0.zero? && s1.zero?
+          unique!(m)
+          rebuild_member(m, wtr, pts.map { |p| p.offset(scale_vec(lv, s0)) }, scale_vec(lv, 1.0 - s0 - s1), mat)
+          trimmed += 1
+        end
+      end
+    end
+    log << "妻側の登り梁 #{verge}本を木製の角材（#{wood.name}）に変更"
+    log << "南側の桁 #{shifted}本を柱の内面（Y=#{SOUTH_HIDE_Y.round}）の奥へ移動"
+    log << "登り梁・繋ぎ梁 #{trimmed}本の端部を柱の内面（南 Y=250 / 北 Y=56,450）で切断"
+    model.commit_operation
+    puts "[STEP G 完了]\n  " + log.join("\n  ")
+    log
+  rescue StandardError => e
+    model.abort_operation
+    UI.messagebox("STEP G でエラーのため中止しました（モデルは変更されていません）:\n#{e.message}")
+    raise
+  end
+
+  # ===========================================================================
   # STEP B: 階別タグ
   # ===========================================================================
   def floor_tag_layers
@@ -1720,6 +1880,7 @@ module TomitaFix
     step_d_ceilings
     step_e_steel
     step_f_roof
+    step_g_roof_steel
     step_b_floor_tags
     UI.messagebox("修正が完了しました。\n詳細は Ruby コンソールのログを確認してください。\n" \
                   "元に戻す場合は [編集]→[元に戻す] を、実行された STEP の数だけ押してください。")
