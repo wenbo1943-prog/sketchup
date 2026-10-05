@@ -38,7 +38,11 @@
 #               蹴上げ = 5,000 / 35 ≒ 142.9mm、踏面 300mm
 # =============================================================================
 
+# 同じ SketchUp で読み込み直したときの「already initialized constant」警告を出さないよう、前回の定義を消す
+Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
+
 module TomitaFix
+  VERSION = '2026-10-05 v4（STEP A/C/D/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -1023,4 +1027,5 @@ module TomitaFix
   end
 end
 
+puts "TomitaFix #{TomitaFix::VERSION} を読み込みました" if defined?(Sketchup)
 TomitaFix.run_all if TomitaFix::AUTO_RUN && defined?(Sketchup)
