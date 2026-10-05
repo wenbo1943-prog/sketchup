@@ -14,6 +14,7 @@
 #          妻面の壁をガラスから土壁へ（何度でも再実行可。PLENUM を変えれば天井を作り直す）
 #  STEP E  鉄骨化（柱・梁・サッシの材料、梁・垂木を H形鋼形状に）、軒（薄い金属屋根・鉄骨垂木）、
 #          吹抜けの手摺（エキスパンドメタル調）、家具の配置（田園調布せせらぎ館を参考）
+#  STEP F  軒と屋根（大屋根は薄い屋根板＋細い垂木＋面戸、下屋は小さな持ち出し材とシャンパングレーの鉄骨）
 #  STEP B  階ごとのタグ（レイヤー）を作成し、全要素を 1F/2F/3F/RF/複数階 に振り分け
 #          - 既存の「部位別タグ」（01_構造… 等）は親グループ側に残すので、
 #            部位別・階別のどちらでも表示/非表示を切り替えられる
@@ -23,10 +24,10 @@
 #   2. [拡張機能]→[Ruby コンソール] を開き、次を入力して Enter
 #        load 'C:/temp/tomita_fix_20261005.rb'
 #      ※ このファイルは日本語を含まないフォルダ（例: C:/temp）に置くと確実です
-#      （このファイルを読み込むと STEP A → C → D → E → B の順で自動実行されます。
+#      （このファイルを読み込むと STEP A → C → D → E → F → B の順で自動実行されます。
 #        実行済みの STEP A・C は自動でスキップします）
 #      個別に実行したい場合は、先頭の AUTO_RUN を false にして読み込み後に
-#        TomitaFix.step_a_south_void / step_c_rooms / step_d_ceilings / step_e_steel / step_b_floor_tags
+#        TomitaFix.step_a_south_void / step_c_rooms / step_d_ceilings / step_e_steel / step_f_roof / step_b_floor_tags
 #   3. 結果が気に入らなければ [編集]→[元に戻す] を、実行された STEP の数だけ押すと元に戻ります
 #
 # 座標の根拠（すべて mm、モデル原点 = 通り芯 X0/Y0・1FL±0、X=東、Y=北）:
@@ -44,7 +45,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-05 v5（STEP A/C/D/E/B）'.freeze
+  VERSION = '2026-10-05 v6（STEP A/C/D/E/F/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -826,8 +827,9 @@ module TomitaFix
     '2F' => [[4_950, -50], [37_250, -50], [37_250, 37_950], [31_350, 37_950],
              [31_350, 40_850], [25_250, 40_850], [25_250, 56_750], [-50, 56_750], [-50, 44_950], [13_450, 44_950],
              [13_450, 27_150], [4_950, 27_150], [4_950, 16_850], [7_850, 16_850], [7_850, 10_850], [4_950, 10_850]],
+    # 3F は西側吹抜けの上も天井でふさぐ（屋根裏が見えないように）
     '3F' => [[4_950, 10_950], [37_250, 10_950], [37_250, 40_850], [25_250, 40_850], [25_250, 56_750], [-50, 56_750],
-             [-50, 44_950], [13_450, 44_950], [13_450, 27_150], [4_950, 27_150]]
+             [-50, 30_250], [4_950, 30_250]]
   }.freeze
   SEAL_T = 20.0
   GABLE_GROUP = '妻面 ガラス・土壁'.freeze
@@ -1356,6 +1358,253 @@ module TomitaFix
   end
 
   # ===========================================================================
+  # STEP F: 軒と屋根（田園調布せせらぎ館の写真を参考）
+  #   ・大屋根: 屋根板を薄く（端部 450→150）し、その下に細い垂木（100×300 @約600）を見せる。
+  #            軒先の垂木の間に白い面戸。妻壁の上端はすき間を土壁で埋める。
+  #   ・下屋: 垂木を小さな角形の持ち出し材（100×150 @約1000）に作り直し、
+  #           下屋まわりの鉄骨（柱・梁・垂木）を明るいシャンパングレーに。屋根は明るいグレー。
+  # ===========================================================================
+  ROOF_OLD_T = 450.0
+  ROOF_NEW_T = 150.0
+  RAFTER_W = 100.0
+  RAFTER_PITCH = 600.0
+  EAVE_RAFTER_W = 100.0
+  EAVE_RAFTER_D = 150.0
+  EAVE_RAFTER_PITCH = 1000.0
+  ROOF_MATS = {
+    rafter: ['TF_大屋根_垂木_ダーク #2F3134', [47, 49, 52]],
+    soffit: ['TF_大屋根_軒天_ダーク #3A3C3F', [58, 60, 63]],
+    menndo: ['TF_大屋根_面戸_白 #E9E7E2', [233, 231, 226]],
+    eave:   ['TF_下屋_鉄骨_シャンパングレー #B3AB9D', [179, 171, 157]]
+  }.freeze
+
+  def roof_mat(key)
+    name, rgb = ROOF_MATS[key]
+    m = model.materials[name] || model.materials.add(name)
+    m.color = Sketchup::Color.new(*rgb)
+    m
+  end
+
+  # 平面 [a,b,c,d]（インチ）上の (x,y) の高さ（mm）
+  def plane_z_mm(pl, x_mm, y_mm)
+    a, b, c, d = pl
+    -(a * x_mm.mm + b * y_mm.mm + d) / c * 25.4
+  end
+
+  def step_f_roof
+    if model.get_attribute(MARK_DICT, 'roof2_done')
+      puts 'STEP F は実行済みのためスキップしました。'
+      return
+    end
+    model.start_operation('軒・屋根（せせらぎ館の写真を参考）', true)
+    log = []
+    roofg, rtr = find_one('最上階 大屋根 (3寸切妻・東西棟)')
+    unique!(roofg)
+    rents = roofg.definition.entities
+    dark_soffit = roof_mat(:soffit)
+    edge_m = mat_prefix('14_')
+    roof_top_m = mat_prefix('01_')
+
+    # --- F1. 大屋根の屋根板を薄く ---
+    planes = []
+    %w[大屋根\ 南面 大屋根\ 北面].each do |nm|
+      g = rents.find { |e| e.is_a?(Sketchup::Group) && e.name == nm }
+      next unless g
+      unique!(g)
+      top = g.definition.entities.grep(Sketchup::Face).max_by { |f| f.normal.transform(g.transformation).z }
+      t = g.transformation
+      pts = top.outer_loop.vertices.map { |v| v.position.transform(t) }
+      nrm = pts[0].vector_to(pts[1]).cross(pts[0].vector_to(pts[2]))
+      nrm.normalize!
+      nrm.reverse! if nrm.z < 0
+      pl = [nrm.x, nrm.y, nrm.z, -nrm.dot(Geom::Vector3d.new(pts[0].x, pts[0].y, pts[0].z))]
+      xs = pts.map { |p| p.x.to_mm }
+      ys = pts.map { |p| p.y.to_mm }
+      planes << { name: nm, pl: pl, poly: pts.map { |p| [p.x.to_mm, p.y.to_mm] }, ymin: ys.min, ymax: ys.max, xmin: xs.min, xmax: xs.max }
+      g.definition.entities.clear!
+      g.transformation = Geom::Transformation.new
+      faces = prism(g.definition.entities, pts, Geom::Vector3d.new(0, 0, -ROOF_NEW_T.mm), edge_m)
+      faces.compact.each do |f|
+        if f.normal.z > 0.5 then f.material = roof_top_m; f.back_material = roof_top_m
+        elsif f.normal.z < -0.5 then f.material = dark_soffit; f.back_material = dark_soffit
+        end
+      end
+    end
+    raise '大屋根の屋根面が見つかりません' if planes.size < 2
+    gap = ROOF_OLD_T - ROOF_NEW_T
+    log << "大屋根の屋根板を #{ROOF_OLD_T.round}→#{ROOF_NEW_T.round} に（軒天はダークグレー）"
+
+    plane_at = lambda do |x, y|
+      planes.find { |p| y >= p[:ymin] - 1 && y <= p[:ymax] + 1 && x >= p[:xmin] - 1 && x <= p[:xmax] + 1 && point_in_poly?(p[:poly], x, y) } ||
+        planes.min_by { |p| [(y - p[:ymin]).abs, (y - p[:ymax]).abs].min }
+    end
+
+    # --- F2. 妻壁の上端のすき間を土壁で埋める ---
+    earth = mat_prefix('03_')
+    filled = 0
+    find_named(GABLE_GROUP).each do |gg, gtr|
+      unique!(gg)
+      ents = gg.definition.entities
+      ents.grep(Sketchup::Edge).to_a.each do |e|
+        a, b = e.vertices.map { |v| v.position.transform(gtr) }
+        on = [a, b].all? do |p|
+          pa = plane_at.call(p.x.to_mm, p.y.to_mm)
+          (plane_z_mm(pa[:pl], p.x.to_mm, p.y.to_mm) - ROOF_OLD_T - p.z.to_mm).abs < 5
+        end
+        next unless on && e.faces.size == 1
+        inv = gtr.inverse
+        q = [a, b, b.offset(Geom::Vector3d.new(0, 0, gap.mm)), a.offset(Geom::Vector3d.new(0, 0, gap.mm))].map { |p| p.transform(inv) }
+        f = ents.add_face(q)
+        next unless f
+        f.material = earth; f.back_material = earth
+        filled += 1
+      end
+    end
+    log << "妻壁の上端 #{filled}か所を土壁で延長（すき間 #{gap.round}）"
+
+    # --- F3. 垂木（100×300 @約600）と面戸 ---
+    old = rents.select { |e| e.is_a?(Sketchup::Group) && ['大屋根 垂木(鉄骨・追加)', '大屋根 垂木(写真2)'].include?(e.name) }
+    rents.erase_entities(old) unless old.empty?
+    rg = rents.add_group
+    rg.name = '大屋根 垂木(写真2)'
+    rg.transformation = rtr.inverse
+    raf = roof_mat(:rafter)
+    white = roof_mat(:menndo)
+    x0 = planes.map { |p| p[:xmin] }.min
+    x1 = planes.map { |p| p[:xmax] }.max
+    n = ((x1 - x0 - RAFTER_W) / RAFTER_PITCH).round
+    pitch = (x1 - x0 - RAFTER_W) / n
+    cnt = 0
+    blocks = 0
+    planes.each do |p|
+      (0..n).each do |i|
+        xa = x0 + i * pitch
+        xc = xa + RAFTER_W / 2
+        ivs = y_intervals(p[:poly], xc)
+        ivs.each do |ya, yb|
+          za = plane_z_mm(p[:pl], xc, ya) - ROOF_OLD_T
+          zb = plane_z_mm(p[:pl], xc, yb) - ROOF_OLD_T
+          prof = [pt(xa, ya, za), pt(xa + RAFTER_W, ya, za), pt(xa + RAFTER_W, ya, za + gap), pt(xa, ya, za + gap)]
+          sub = rg.entities.add_group
+          prism(sub.entities, prof, Geom::Vector3d.new(0, (yb - ya).mm, (zb - za).mm), raf)
+          cnt += 1
+          next if i == n
+          # 軒先（低い側の端）の垂木間に白い面戸
+          ylow = za < zb ? ya : yb
+          dir = za < zb ? 1 : -1
+          zt = [za, zb].min + gap # 軒先での屋根板の下端
+          bx0 = xa + RAFTER_W + (pitch - RAFTER_W - 200) / 2.0
+          y0b, y1b = [ylow, ylow + dir * 100].minmax
+          box(rg.entities, bx0, y0b, zt - 100, bx0 + 200, y1b, zt - 10, white)
+          blocks += 1
+        end
+      end
+    end
+    log << "大屋根の下に垂木 #{cnt}本（100×300、ピッチ約#{pitch.round}）、軒先の面戸 #{blocks}個"
+
+    # --- F4. 下屋: 垂木を小さな持ち出し材に作り直し、鉄骨をシャンパングレーに ---
+    shita, = find_one('1F 下屋 (南・西・北3m / 東0.6m)')
+    unique!(shita)
+    eave_m = roof_mat(:eave)
+    tg = shita.definition.entities.grep(Sketchup::Group).find { |e| e.name == '下屋 繋ぎ梁・垂木' }
+    removed = 0
+    if tg
+      unique!(tg)
+      dead = tg.definition.entities.grep(Sketchup::Group).select do |e|
+        mn, mx = world_bb_mm(e, tg.transformation)
+        mn && mn[2] >= 3_700 && mx[2] <= 5_000
+      end
+      tg.definition.entities.erase_entities(dead) unless dead.empty?
+      removed = dead.size
+    end
+    made = 0
+    shita.definition.entities.grep(Sketchup::Group).each do |slab|
+      next unless slab.name.start_with?('下屋 (')
+      bot = slab.definition.entities.grep(Sketchup::Face).min_by { |f| f.normal.z }
+      next unless bot && bot.normal.z < -0.5
+      ps = bot.outer_loop.vertices.map { |v| v.position.transform(slab.transformation) }
+      zmax = ps.map(&:z).max
+      zmin = ps.map(&:z).min
+      up = ps.select { |q| (q.z - zmax).abs < 0.05 }
+      lo = ps.select { |q| (q.z - zmin).abs < 0.05 }
+      next if up.size < 2 || lo.size < 2
+      u = up[0].vector_to(up[1]); u.z = 0; u.normalize!
+      proj = ->(q) { q.x * u.x + q.y * u.y }
+      ua = up.map(&proj).minmax
+      la = lo.map(&proj).minmax
+      t0 = [ua[0], la[0]].max
+      t1 = [ua[1], la[1]].min
+      next if (t1 - t0).to_mm < 300
+      d = up[0].vector_to(lo[0]); d = d - Geom::Vector3d.new(u.x * d.dot(u), u.y * d.dot(u), 0) # 斜面方向（軒先へ）
+      len_t = (t1 - t0).to_mm
+      k = [(len_t / EAVE_RAFTER_PITCH).round, 1].max
+      step = len_t / k
+      k.times do |i|
+        tc = t0 + ((i + 0.5) * step).mm
+        base = up[0].offset(Geom::Vector3d.new(u.x * (tc - proj.call(up[0]) - (EAVE_RAFTER_W / 2).mm), u.y * (tc - proj.call(up[0]) - (EAVE_RAFTER_W / 2).mm), 0))
+        o = base.offset(Geom::Vector3d.new(0, 0, -EAVE_RAFTER_D.mm))
+        prof = [o, o.offset(Geom::Vector3d.new(u.x * EAVE_RAFTER_W.mm, u.y * EAVE_RAFTER_W.mm, 0)),
+                o.offset(Geom::Vector3d.new(u.x * EAVE_RAFTER_W.mm, u.y * EAVE_RAFTER_W.mm, EAVE_RAFTER_D.mm)),
+                o.offset(Geom::Vector3d.new(0, 0, EAVE_RAFTER_D.mm))]
+        g = shita.definition.entities.add_group
+        g.name = '下屋 垂木(写真1)'
+        prism(g.entities, prof, d, eave_m)
+        made += 1
+      end
+    end
+    # 下屋まわりの鉄骨（柱・繋ぎ梁・鼻先の梁）をシャンパングレーに
+    steel = mat_prefix('06_')
+    recol = 0
+    shita.definition.entities.grep(Sketchup::Group).each do |g|
+      next if g.name.start_with?('下屋 (') || g.name == '下屋 繋ぎ梁・垂木' || g.name == '下屋 垂木(写真1)'
+      fs = g.definition.entities.grep(Sketchup::Face)
+      next unless g.material == steel || fs.any? { |f| f.material == steel }
+      g.material = eave_m if g.material == steel
+      fs.each { |f| f.material = eave_m if f.material == steel; f.back_material = eave_m if f.back_material == steel }
+      recol += 1
+    end
+    roof15 = mat_prefix('15_')
+    if roof15
+      roof15.color = Sketchup::Color.new(168, 164, 157)
+      roof15.name = '15_屋根_ガルバリウム立平_ライトグレー #A8A49D'
+    end
+    log << "下屋: 垂木 #{removed}本を撤去し、持ち出し材（100×150）を #{made}本作成。鉄骨 #{recol}本をシャンパングレーに、屋根を明るいグレーに"
+
+    model.set_attribute(MARK_DICT, 'roof2_done', true)
+    model.commit_operation
+    puts "[STEP F 完了]\n  " + log.join("\n  ")
+    log
+  rescue StandardError => e
+    model.abort_operation
+    UI.messagebox("STEP F でエラーのため中止しました（モデルは変更されていません）:\n#{e.message}")
+    raise
+  end
+
+  def point_in_poly?(poly, x, y)
+    inside = false
+    poly.each_with_index do |(x0, y0), i|
+      x1, y1 = poly[(i + 1) % poly.size]
+      next if (y0 > y) == (y1 > y)
+      xi = x0 + (y - y0) * (x1 - x0) / (y1 - y0)
+      inside = !inside if x < xi
+    end
+    inside
+  end
+
+  # 多角形 poly（mm）を鉛直線 x で切ったときの y 区間
+  def y_intervals(poly, x)
+    ys = []
+    poly.each_with_index do |(x0, y0), i|
+      x1, y1 = poly[(i + 1) % poly.size]
+      next if (x0 - x1).abs < 1e-6
+      lo, hi = [x0, x1].minmax
+      next unless x > lo && x < hi
+      ys << y0 + (x - x0) * (y1 - y0) / (x1 - x0)
+    end
+    ys.sort.each_slice(2).map { |a, b| [a, b] }.select { |_, b| b }
+  end
+
+  # ===========================================================================
   # STEP B: 階別タグ
   # ===========================================================================
   def floor_tag_layers
@@ -1470,6 +1719,7 @@ module TomitaFix
     step_c_rooms
     step_d_ceilings
     step_e_steel
+    step_f_roof
     step_b_floor_tags
     UI.messagebox("修正が完了しました。\n詳細は Ruby コンソールのログを確認してください。\n" \
                   "元に戻す場合は [編集]→[元に戻す] を、実行された STEP の数だけ押してください。")
