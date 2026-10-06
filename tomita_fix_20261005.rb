@@ -48,7 +48,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-06 v8（STEP A/C/D/E/F/G/H/B）'.freeze
+  VERSION = '2026-10-06 v8.1（STEP A/C/D/E/F/G/H/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -1806,15 +1806,18 @@ module TomitaFix
   #   H3. ブリッジ（歩道橋 接続デッキ）と歩道橋本体の床を木目調塩ビシート NS8402 に
   #   H4. ブリッジの手摺を木目調アルミの縦格子（NS8403 の色）に作り直す
   #   H5. ブリッジと歩道橋本体の取り合いに EXP.J カバー（床・手摺部）
+  #   H6. 歩道橋本体の手摺をアルミ（グレー）に
   #   ・何度実行しても同じ結果になる（作ったグループは名前で探して作り直す）
   # ===========================================================================
   H_MATS = {
     soffit:  ['TF_大屋根_軒天_ライトグレー #C4C6C8', [196, 198, 200]],
     floor:   ['TF_床_塩ビシート_木目_NS8402 #B19880', [177, 152, 128]],
     rail:    ['TF_手摺_木目調アルミ_NS8403 #948173', [148, 129, 115]],
-    expj:    ['TF_EXPJカバー_アルミ_シルバー #B8BBBE', [184, 187, 190]]
+    expj:    ['TF_EXPJカバー_アルミ_シルバー #B8BBBE', [184, 187, 190]],
+    walk_rail: ['TF_歩道橋手摺_アルミ_グレー #9EA2A6', [158, 162, 166]]
   }.freeze
-  EAVE_COL_D = 350.0        # 木の丸柱の直径（鉄骨柱 240 を包む）
+  EAVE_COL_D = 229.4        # 木の丸柱の直径（指定値）
+  EAVE_CORE_D = 139.8       # 中の鉄骨（鋼管 φ139.8。H形 240×120 は φ229.4 の外にはみ出すため置き換える）
   EAVE_COL_FOOT = 300.0     # 柱の下端から木の下端まで（鉄骨の柱脚を見せる。地面から約150）
   EAVE_COL_SIDES = 24
   EAVE_COL_GROUP = '下屋 柱 木被覆(丸柱)'.freeze
@@ -1829,10 +1832,51 @@ module TomitaFix
   CAP_W = 60.0
   CAP_H = 40.0
   EXPJ_X = -6_002.0         # 歩道橋本体（〜X−6,010）とブリッジ（X−5,994〜）の境
-  EXPJ_W = 300.0
+  EXPJ_W = 600.0            # カバーの幅（遊間 約200〜400 ＋ 両側の掛かり。1m は免震用の規模）
   EXPJ_GROUP = 'ブリッジ EXP.J カバー'.freeze
   WALKWAY_BOX = { x0: -25_200.0, x1: -5_990.0, y0: 0.0, y1: 28_000.0, z0: 100.0, z1: 4_960.0 }.freeze # 歩道橋本体の床を探す範囲
   WALKWAY_MIN_W = 1_000.0   # 幅がこれ未満の面（笠木・縁石・橋脚の天端）は床とみなさない
+  WALK_RAIL_BOX = { x0: -25_200.0, x1: -5_990.0, y0: 0.0, y1: 28_000.0, z0: -1_000.0, z1: 6_100.0 }.freeze # 歩道橋本体の手摺を探す範囲
+  WALK_RAIL_MAX_T = 150.0   # 平面の細い方の寸法がこれ以下の部材を手摺（手摺子・支柱・笠木・手すり）とみなす（桁・立上りは 200 以上）
+
+  # 円柱（world 座標 mm で指定。inv を渡すとその座標系に変換して作る）。側面の縦の辺はなめらかにする
+  def round_prism(ents, cx, cy, z0, h, r, material, inv = nil)
+    pts = (0...EAVE_COL_SIDES).map do |i|
+      a = 2 * Math::PI * i / EAVE_COL_SIDES
+      pt(cx + r * Math.cos(a), cy + r * Math.sin(a), z0)
+    end
+    vec = Geom::Vector3d.new(0, 0, h.mm)
+    if inv
+      pts = pts.map { |q| q.transform(inv) }
+      vec = vec.transform(inv)
+    end
+    faces = prism(ents, pts, vec, material)
+    faces.compact.each do |f|
+      next if f.normal.z.abs > 0.5 || !f.respond_to?(:edges)
+      f.edges.each do |ed|
+        next unless ed.respond_to?(:soft=)
+        a, b = ed.vertices.map(&:position)
+        next unless (a.x - b.x).abs < 0.01 && (a.y - b.y).abs < 0.01
+        ed.soft = true
+        ed.smooth = true
+      end
+    end
+    faces
+  end
+
+  # 子のグループを持たない（面だけの）グループ／コンポーネントを順に渡す。yield(entity, 親の world 変換)
+  def each_leaf(ents, tr, skip_prefix = ['外構'], &blk)
+    ents.each do |e|
+      next unless container?(e)
+      next if skip_prefix.any? { |sp| e.name.start_with?(sp) }
+      kids = e.definition.entities
+      if kids.any? { |c| container?(c) }
+        each_leaf(kids, tr * e.transformation, skip_prefix, &blk)
+      elsif kids.any? { |c| c.is_a?(Sketchup::Face) }
+        blk.call(e, tr)
+      end
+    end
+  end
 
   def h_mat(key)
     name, rgb = H_MATS[key]
@@ -1909,31 +1953,20 @@ module TomitaFix
     wg = sents.add_group
     wg.name = EAVE_COL_GROUP
     wg.transformation = str.inverse
-    r = EAVE_COL_D / 2.0
-    keep.each do |_, mn, mx|
+    keep.each do |g, mn, mx|
       cx = (mn[0] + mx[0]) / 2.0
       cy = (mn[1] + mx[1]) / 2.0
+      # 中の鉄骨を鋼管 φ139.8 に作り直す（柱の位置・高さはそのまま）
+      core_m = g.definition.entities.grep(Sketchup::Face).first&.material || eave_m
+      unique!(g)
+      gents = g.definition.entities
+      gents.clear!
+      round_prism(gents, cx, cy, mn[2], mx[2] - mn[2], EAVE_CORE_D / 2.0, core_m, (str * g.transformation).inverse)
+      # 木の丸柱（足元は鉄骨を見せる）
       z0 = mn[2] + EAVE_COL_FOOT
-      circle = (0...EAVE_COL_SIDES).map do |i|
-        a = 2 * Math::PI * i / EAVE_COL_SIDES
-        pt(cx + r * Math.cos(a), cy + r * Math.sin(a), z0)
-      end
-      cg = wg.entities.add_group
-      faces = prism(cg.entities, circle, Geom::Vector3d.new(0, 0, (mx[2] - z0).mm), wood)
-      # 側面の縦の辺をなめらかにして丸く見せる
-      faces.compact.each do |f|
-        next if f.normal.z.abs > 0.5
-        next unless f.respond_to?(:edges)
-        f.edges.each do |ed|
-          next unless ed.respond_to?(:soft=)
-          a, b = ed.vertices.map(&:position)
-          next unless (a.x - b.x).abs < 0.01 && (a.y - b.y).abs < 0.01
-          ed.soft = true
-          ed.smooth = true
-        end
-      end
+      round_prism(wg.entities.add_group.entities, cx, cy, z0, mx[2] - z0, EAVE_COL_D / 2.0, wood)
     end
-    log << "1階の軒の柱 #{keep.size}本を木の丸柱（φ#{EAVE_COL_D.round}、#{wood.name}）に。" \
+    log << "1階の軒の柱 #{keep.size}本を木の丸柱（φ#{EAVE_COL_D}、#{wood.name}）に。中の鉄骨は鋼管 φ#{EAVE_CORE_D} に置き換え、" \
            "足元 #{EAVE_COL_FOOT.round} は鉄骨を見せる。重なっていた柱 #{dup.size}本を削除"
 
     # --- H3. 床を木目調塩ビシート NS8402 に ---
@@ -2027,6 +2060,20 @@ module TomitaFix
       box(ej.entities, x0, yc - 40, zj + 6, x1, yc + 40, zj + RAIL_H, ex_m) # 手摺部のカバー（かぶり）
     end
     log << "EXP.J カバー: X #{x0.round}〜#{x1.round}（幅 #{EXPJ_W.round}）、床プレート＋手摺部のカバー（#{ex_m.name}）"
+
+    # --- H6. 歩道橋本体の手摺をアルミ（グレー）に ---
+    wr_m = h_mat(:walk_rail)
+    q = WALK_RAIL_BOX
+    n_rail = 0
+    each_leaf(model.entities, Geom::Transformation.new) do |e, ptr|
+      mn, mx = world_bb_mm(e, ptr)
+      next unless mn
+      next unless mn[0] >= q[:x0] && mx[0] <= q[:x1] && mn[1] >= q[:y0] && mx[1] <= q[:y1] && mn[2] >= q[:z0] && mx[2] <= q[:z1]
+      next unless [mx[0] - mn[0], mx[1] - mn[1]].min <= WALK_RAIL_MAX_T
+      e.material = wr_m
+      n_rail += 1
+    end
+    log << "歩道橋本体の手摺 #{n_rail}部材をアルミ（#{wr_m.name}）に"
 
     model.commit_operation
     puts "[STEP H 完了]\n  " + log.join("\n  ")
