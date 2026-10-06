@@ -48,7 +48,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-06 v9（STEP A/C/D/E/F/G/H/I/B）'.freeze
+  VERSION = '2026-10-06 v9.1（STEP A/C/D/E/F/G/H/I/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -2208,7 +2208,10 @@ module TomitaFix
   # ===========================================================================
   SIGN_GROUP = 'サイン（Takatsuki Common Ground・高槻市章）'.freeze
   SIGN_TEXT = 'Takatsuki Common Ground'.freeze
-  SIGN_FONT = 'Arial'.freeze
+  # フォント: 参考のサイン（庄内コラボセンター）の欧文に字形が近い Windows 標準の Segoe UI を太字で使う
+  #   （画像からフォント名は特定できないため近いものを選定。細くしたい場合は SIGN_BOLD = false）
+  SIGN_FONT = 'Segoe UI'.freeze
+  SIGN_BOLD = true
   SIGN_TEXT_H = 1_300.0       # 文字の高さ（大文字）
   SIGN_TEXT_BASE_Z = 14_400.0 # 文字の下端（ベースライン）。妻面の下端 14,000 の上
   SIGN_TEXT_NORTH_Y = 51_000.0 # 文字の北端（左端）。屋根の下端より下に収まる位置
@@ -2267,11 +2270,11 @@ module TomitaFix
     # 文字（3D テキスト）
     tg = sg.entities.add_group
     tg.name = "文字 #{SIGN_TEXT}"
-    tg.entities.add_3d_text(SIGN_TEXT, TextAlignLeft, SIGN_FONT, false, false, SIGN_TEXT_H.mm, 0.0, 0.0, true, SIGN_DEPTH.mm)
+    tg.entities.add_3d_text(SIGN_TEXT, TextAlignLeft, SIGN_FONT, SIGN_BOLD, false, SIGN_TEXT_H.mm, 0.0, 0.0, true, SIGN_DEPTH.mm)
     len = tg.bounds.width.to_mm
     tg.transformation = west_gable_axes(SIGN_TEXT_NORTH_Y, SIGN_TEXT_BASE_Z)
     tg.material = sign_mat(:text)
-    log << "文字「#{SIGN_TEXT}」（#{SIGN_FONT}、高さ #{SIGN_TEXT_H.round}、長さ 約#{len.round}）: Y #{SIGN_TEXT_NORTH_Y.round}〜#{(SIGN_TEXT_NORTH_Y - len).round}、下端 Z #{SIGN_TEXT_BASE_Z.round}"
+    log << "文字「#{SIGN_TEXT}」（#{SIGN_FONT}#{SIGN_BOLD ? ' Bold' : ''}、高さ #{SIGN_TEXT_H.round}、長さ 約#{len.round}）: Y #{SIGN_TEXT_NORTH_Y.round}〜#{(SIGN_TEXT_NORTH_Y - len).round}、下端 Z #{SIGN_TEXT_BASE_Z.round}"
 
     # 高槻市章（トレースした輪郭を面にして厚さを付ける）
     lg = sg.entities.add_group
