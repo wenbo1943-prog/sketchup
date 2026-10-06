@@ -16,6 +16,7 @@
 #          吹抜けの手摺（エキスパンドメタル調）、家具の配置（田園調布せせらぎ館を参考）
 #  STEP F  軒と屋根（大屋根は薄い屋根板＋細い垂木＋面戸、下屋は小さな持ち出し材とシャンパングレーの鉄骨）
 #  STEP G  屋根まわりの鉄骨（妻側の登り梁を木製に、南北の軒の桁・登り梁を柱の内面より奥へ）
+#  STEP H  上司の意見（大屋根の軒天を明るく、1階の軒の柱を木の丸柱に、ブリッジ・歩道橋の床と手摺、EXP.J）
 #  STEP B  階ごとのタグ（レイヤー）を作成し、全要素を 1F/2F/3F/RF/複数階 に振り分け
 #          - 既存の「部位別タグ」（01_構造… 等）は親グループ側に残すので、
 #            部位別・階別のどちらでも表示/非表示を切り替えられる
@@ -25,11 +26,11 @@
 #   2. [拡張機能]→[Ruby コンソール] を開き、次を入力して Enter
 #        load 'C:/temp/tomita_fix_20261005.rb'
 #      ※ このファイルは日本語を含まないフォルダ（例: C:/temp）に置くと確実です
-#      （このファイルを読み込むと STEP A → C → D → E → F → G → B の順で自動実行されます。
+#      （このファイルを読み込むと STEP A → C → D → E → F → G → H → B の順で自動実行されます。
 #        実行済みの STEP A・C は自動でスキップします）
 #      個別に実行したい場合は、先頭の AUTO_RUN を false にして読み込み後に
 #        TomitaFix.step_a_south_void / step_c_rooms / step_d_ceilings / step_e_steel / step_f_roof /
-#        step_g_roof_steel / step_b_floor_tags
+#        step_g_roof_steel / step_h_review / step_b_floor_tags
 #   3. 結果が気に入らなければ [編集]→[元に戻す] を、実行された STEP の数だけ押すと元に戻ります
 #
 # 座標の根拠（すべて mm、モデル原点 = 通り芯 X0/Y0・1FL±0、X=東、Y=北）:
@@ -47,7 +48,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-05 v7.1（STEP A/C/D/E/F/G/B）'.freeze
+  VERSION = '2026-10-06 v8（STEP A/C/D/E/F/G/H/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -1316,12 +1317,22 @@ module TomitaFix
     log << "吹抜けまわりの手摺 #{targets.size}グループをエキスパンドメタル調（グレー・半透明）に"
 
     # --- E7. 家具 ---
-    bld = model.entities.find { |e| container?(e) && e.name.start_with?(BUILDING_PREFIX) }
-    old = bld.definition.entities.select { |e| e.is_a?(Sketchup::Group) && e.name == '家具（せせらぎ館風）' }
-    bld.definition.entities.erase_entities(old) unless old.empty?
-    fg = bld.definition.entities.add_group
+    # 既存の家具グループは、ユーザーがグループ化して移動していても探して作り直す（同じ場所に作る）
+    old_hits = find_named('家具（せせらぎ館風）')
+    if old_hits.empty?
+      bld = model.entities.find { |e| container?(e) && e.name.start_with?(BUILDING_PREFIX) }
+      fents = bld.definition.entities
+      ftr = bld.transformation
+    else
+      o, ot = old_hits.first
+      par = o.parent
+      fents = par.respond_to?(:entities) ? par.entities : par
+      ftr = ot * o.transformation.inverse
+      old_hits.each { |g, _| g.erase! if g.valid? }
+    end
+    fg = fents.add_group
     fg.name = '家具（せせらぎ館風）'
-    fg.transformation = bld.transformation.inverse
+    fg.transformation = ftr.inverse
     tdef, cdef, bdef = furniture_defs
     ztab = { '1F' => 0.0, '2F' => 5000.0, '3F' => 9500.0 }
     TABLES.each do |fl, x, y|
@@ -1789,6 +1800,244 @@ module TomitaFix
   end
 
   # ===========================================================================
+  # STEP H: 上司の意見（2026-10-06）
+  #   H1. 大屋根の軒天を明るく（案B: 鉄骨の垂木はそのまま、軒天の色だけ下屋と同じライトグレーに）
+  #   H2. 1階の軒（下屋）の柱を木の丸柱に（鉄骨の柱を集成材で包む。足元は鉄骨を見せる）
+  #   H3. ブリッジ（歩道橋 接続デッキ）と歩道橋本体の床を木目調塩ビシート NS8402 に
+  #   H4. ブリッジの手摺を木目調アルミの縦格子（NS8403 の色）に作り直す
+  #   H5. ブリッジと歩道橋本体の取り合いに EXP.J カバー（床・手摺部）
+  #   ・何度実行しても同じ結果になる（作ったグループは名前で探して作り直す）
+  # ===========================================================================
+  H_MATS = {
+    soffit:  ['TF_大屋根_軒天_ライトグレー #C4C6C8', [196, 198, 200]],
+    floor:   ['TF_床_塩ビシート_木目_NS8402 #B19880', [177, 152, 128]],
+    rail:    ['TF_手摺_木目調アルミ_NS8403 #948173', [148, 129, 115]],
+    expj:    ['TF_EXPJカバー_アルミ_シルバー #B8BBBE', [184, 187, 190]]
+  }.freeze
+  EAVE_COL_D = 350.0        # 木の丸柱の直径（鉄骨柱 240 を包む）
+  EAVE_COL_FOOT = 300.0     # 柱の下端から木の下端まで（鉄骨の柱脚を見せる。地面から約150）
+  EAVE_COL_SIDES = 24
+  EAVE_COL_GROUP = '下屋 柱 木被覆(丸柱)'.freeze
+  BRIDGE_DECK = '歩道橋 接続デッキ'.freeze
+  BRIDGE_BOX = { x0: -6_000.0, x1: 4_760.0, y0: 3_590.0, y1: 6_110.0 }.freeze # ブリッジの範囲（平面）
+  BRIDGE_RAIL_Y = [3_652.0, 6_052.0].freeze # 手摺の芯（既存の手摺子の芯）
+  BRIDGE_RAIL_GROUP = 'ブリッジ 手摺(木目調アルミ NS8403)'.freeze
+  RAIL_H = 1_100.0          # 手摺高さ（2階以上のバルコニー等は 1.1m 以上: 建築基準法施行令126条）
+  BALUSTER_W = 30.0         # 縦格子の見付（手摺の方向）
+  BALUSTER_D = 50.0         # 縦格子の見込
+  BALUSTER_PITCH = 100.0    # 縦格子の間隔（すき間 70 ≦ 110）
+  CAP_W = 60.0
+  CAP_H = 40.0
+  EXPJ_X = -6_002.0         # 歩道橋本体（〜X−6,010）とブリッジ（X−5,994〜）の境
+  EXPJ_W = 300.0
+  EXPJ_GROUP = 'ブリッジ EXP.J カバー'.freeze
+  WALKWAY_BOX = { x0: -25_200.0, x1: -5_990.0, y0: 0.0, y1: 28_000.0, z0: 100.0, z1: 4_960.0 }.freeze # 歩道橋本体の床を探す範囲
+  WALKWAY_MIN_W = 1_000.0   # 幅がこれ未満の面（笠木・縁石・橋脚の天端）は床とみなさない
+
+  def h_mat(key)
+    name, rgb = H_MATS[key]
+    m = model.materials[name] || model.materials.add(name)
+    m.color = Sketchup::Color.new(*rgb)
+    m
+  end
+
+  # 上向きの面（world 法線 z > 0.9）を探す。yield(face, world_points) が true の面を返す
+  def up_faces(ents, tr, out = [], skip_prefix = ['外構'], &blk)
+    ents.each do |e|
+      if container?(e)
+        next if skip_prefix.any? { |s| e.name.start_with?(s) }
+        up_faces(e.definition.entities, tr * e.transformation, out, skip_prefix, &blk)
+      elsif e.is_a?(Sketchup::Face)
+        n = e.normal.transform(tr)
+        next if n.length < 1e-9
+        n.normalize!
+        next unless n.z > 0.9
+        pts = e.outer_loop.vertices.map { |v| v.position.transform(tr) }
+        out << e if blk.call(e, pts)
+      end
+    end
+    out
+  end
+
+  def paint(face, m)
+    face.material = m
+    face.back_material = m
+  end
+
+  def step_h_review
+    model.start_operation('上司の意見（軒天・木の丸柱・ブリッジ）', true)
+    log = []
+
+    # --- H1. 大屋根の軒天を明るく ---
+    soff = model.materials.find { |m| m.name.start_with?('TF_大屋根_軒天') }
+    if soff
+      name, rgb = H_MATS[:soffit]
+      soff.color = Sketchup::Color.new(*rgb)
+      soff.name = name unless soff.name == name
+      log << "大屋根の軒天を #{name} に（下屋の軒天と同じ色）"
+    else
+      log << '（スキップ）大屋根の軒天の材料（TF_大屋根_軒天…）が見つかりません'
+    end
+
+    # --- H2. 1階の軒の柱を木の丸柱に ---
+    shita, str = find_one('1F 下屋 (南・西・北3m / 東0.6m)')
+    unique!(shita)
+    sents = shita.definition.entities
+    old = sents.select { |e| e.is_a?(Sketchup::Group) && e.name == EAVE_COL_GROUP }
+    sents.erase_entities(old) unless old.empty?
+    eave_m = model.materials.find { |m| m.name.start_with?('TF_下屋_鉄骨') }
+    cols = []
+    sents.grep(Sketchup::Group).each do |g|
+      mn, mx = world_bb_mm(g, str)
+      next unless mn
+      next unless mx[2] - mn[2] > 2_500 && mx[0] - mn[0] < 400 && mx[1] - mn[1] < 400 && mn[2] < 100 && mx[2] < 5_500
+      cols << [g, mn, mx]
+    end
+    # 同じ位置に重なっている柱は1本にする（下屋の色の柱を残す）
+    cols.sort_by! { |g, _, _| g.definition.entities.grep(Sketchup::Face).any? { |f| f.material == eave_m } ? 0 : 1 }
+    keep = []
+    dup = []
+    cols.each do |c|
+      if keep.any? { |k| (0..2).all? { |i| (k[1][i] - c[1][i]).abs < 5 && (k[2][i] - c[2][i]).abs < 5 } }
+        dup << c[0]
+      else
+        keep << c
+      end
+    end
+    sents.erase_entities(dup) unless dup.empty?
+    wood = mat_prefix('05_木格子') || mat_prefix('05_')
+    wg = sents.add_group
+    wg.name = EAVE_COL_GROUP
+    wg.transformation = str.inverse
+    r = EAVE_COL_D / 2.0
+    keep.each do |_, mn, mx|
+      cx = (mn[0] + mx[0]) / 2.0
+      cy = (mn[1] + mx[1]) / 2.0
+      z0 = mn[2] + EAVE_COL_FOOT
+      circle = (0...EAVE_COL_SIDES).map do |i|
+        a = 2 * Math::PI * i / EAVE_COL_SIDES
+        pt(cx + r * Math.cos(a), cy + r * Math.sin(a), z0)
+      end
+      cg = wg.entities.add_group
+      faces = prism(cg.entities, circle, Geom::Vector3d.new(0, 0, (mx[2] - z0).mm), wood)
+      # 側面の縦の辺をなめらかにして丸く見せる
+      faces.compact.each do |f|
+        next if f.normal.z.abs > 0.5
+        next unless f.respond_to?(:edges)
+        f.edges.each do |ed|
+          next unless ed.respond_to?(:soft=)
+          a, b = ed.vertices.map(&:position)
+          next unless (a.x - b.x).abs < 0.01 && (a.y - b.y).abs < 0.01
+          ed.soft = true
+          ed.smooth = true
+        end
+      end
+    end
+    log << "1階の軒の柱 #{keep.size}本を木の丸柱（φ#{EAVE_COL_D.round}、#{wood.name}）に。" \
+           "足元 #{EAVE_COL_FOOT.round} は鉄骨を見せる。重なっていた柱 #{dup.size}本を削除"
+
+    # --- H3. 床を木目調塩ビシート NS8402 に ---
+    floor_m = h_mat(:floor)
+    deck_hits = find_named(BRIDGE_DECK)
+    n_deck = 0
+    deck_top = nil
+    deck_y = nil
+    deck_hits.each do |g, t|
+      ups = g.definition.entities.grep(Sketchup::Face).select { |f| f.normal.transform(t).normalize!.z > 0.9 }
+      top = ups.max_by { |f| f.vertices.map { |v| v.position.transform(t).z }.max }
+      next unless top
+      paint(top, floor_m)
+      pts = top.outer_loop.vertices.map { |v| v.position.transform(t) }
+      # デッキ上面は勾配が付いている（歩道橋側 X−5,994 で低い）ので、面の平面から高さを求める
+      nrm = top.normal.transform(t)
+      nrm.normalize!
+      p0 = pts.first
+      deck_top = lambda do |x, y|
+        p0.z.to_mm - (nrm.x * (x - p0.x.to_mm) + nrm.y * (y - p0.y.to_mm)) / nrm.z
+      end
+      deck_y = pts.map { |p| p.y.to_mm }.minmax
+      n_deck += 1
+    end
+    w = WALKWAY_BOX
+    walk = up_faces(model.entities, Geom::Transformation.new) do |_f, pts|
+      xs = pts.map { |p| p.x.to_mm }
+      ys = pts.map { |p| p.y.to_mm }
+      zs = pts.map { |p| p.z.to_mm }
+      xs.min >= w[:x0] && xs.max <= w[:x1] && ys.min >= w[:y0] && ys.max <= w[:y1] &&
+        zs.min >= w[:z0] && zs.max <= w[:z1] && [xs.max - xs.min, ys.max - ys.min].min >= WALKWAY_MIN_W
+    end
+    walk.each { |f| paint(f, floor_m) }
+    log << "床を #{floor_m.name} に: ブリッジ #{n_deck}面、歩道橋本体 #{walk.size}面（通路・スロープ・階段の上向きの面）"
+    raise "「#{BRIDGE_DECK}」の上面が見つかりません" unless deck_top
+
+    # --- H4. ブリッジの手摺 ---
+    host, htr = find_one('外部階段 (1F→2F) ・ 歩道橋接続')
+    unique!(host)
+    hents = host.definition.entities
+    white = mat_prefix('59_')
+    b = BRIDGE_BOX
+    dead = hents.select do |e|
+      next false unless container?(e)
+      if e.name == BRIDGE_RAIL_GROUP || e.name == EXPJ_GROUP
+        true
+      else
+        m = e.material || e.definition.entities.grep(Sketchup::Face).first&.material
+        mn, mx = world_bb_mm(e, htr)
+        zd = deck_top.call(mn[0], mn[1]) if mn
+        m && m == white && mn && mn[0] >= b[:x0] && mx[0] <= b[:x1] && mn[1] >= b[:y0] && mx[1] <= b[:y1] &&
+          mn[2] >= zd - 200 && mx[2] <= zd + 1_400
+      end
+    end
+    n_old = dead.count { |e| e.name != BRIDGE_RAIL_GROUP && e.name != EXPJ_GROUP }
+    hents.erase_entities(dead) unless dead.empty?
+    rail_m = h_mat(:rail)
+    rg = hents.add_group
+    rg.name = BRIDGE_RAIL_GROUP
+    rg.transformation = htr.inverse
+    xa = EXPJ_X + EXPJ_W / 2 + 20
+    xb = b[:x1] - 10
+    nb = 0
+    BRIDGE_RAIL_Y.each do |yc|
+      za = deck_top.call(xa, yc) + RAIL_H
+      zb = deck_top.call(xb, yc) + RAIL_H
+      cap = [pt(xa, yc - CAP_W / 2, za - CAP_H), pt(xa, yc + CAP_W / 2, za - CAP_H), pt(xa, yc + CAP_W / 2, za), pt(xa, yc - CAP_W / 2, za)]
+      prism(rg.entities, cap, Geom::Vector3d.new((xb - xa).mm, 0, (zb - za).mm), rail_m) # 笠木（デッキの勾配に合わせる）
+      x = xa
+      while x + BALUSTER_W <= xb
+        z0 = deck_top.call(x + BALUSTER_W / 2, yc)
+        box(rg.entities, x, yc - BALUSTER_D / 2, z0, x + BALUSTER_W, yc + BALUSTER_D / 2, z0 + RAIL_H - CAP_H, rail_m)
+        nb += 1
+        x += BALUSTER_PITCH
+      end
+    end
+    log << "ブリッジの手摺: 既存の白い手摺 #{n_old}部材を撤去し、木目調アルミの縦格子 #{nb}本（#{BALUSTER_W.round}×#{BALUSTER_D.round} @#{BALUSTER_PITCH.round}）" \
+           "＋笠木 #{CAP_W.round}×#{CAP_H.round}、高さ #{RAIL_H.round} に（#{rail_m.name}）"
+
+    # --- H5. EXP.J カバー ---
+    ej = hents.add_group
+    ej.name = EXPJ_GROUP
+    ej.transformation = htr.inverse
+    ex_m = h_mat(:expj)
+    x0 = EXPJ_X - EXPJ_W / 2
+    x1 = EXPJ_X + EXPJ_W / 2
+    yd0, yd1 = deck_y
+    zj = deck_top.call(EXPJ_X, (yd0 + yd1) / 2) # 継ぎ目の床の高さ（歩道橋本体と同じ高さ）
+    box(ej.entities, x0, yd0, zj, x1, yd1, zj + 6, ex_m) # 床のカバープレート（厚さ6）
+    BRIDGE_RAIL_Y.each do |yc|
+      box(ej.entities, x0, yc - 40, zj + 6, x1, yc + 40, zj + RAIL_H, ex_m) # 手摺部のカバー（かぶり）
+    end
+    log << "EXP.J カバー: X #{x0.round}〜#{x1.round}（幅 #{EXPJ_W.round}）、床プレート＋手摺部のカバー（#{ex_m.name}）"
+
+    model.commit_operation
+    puts "[STEP H 完了]\n  " + log.join("\n  ")
+    log
+  rescue StandardError => e
+    model.abort_operation
+    UI.messagebox("STEP H でエラーのため中止しました（モデルは変更されていません）:\n#{e.message}")
+    raise
+  end
+
+  # ===========================================================================
   # STEP B: 階別タグ
   # ===========================================================================
   def floor_tag_layers
@@ -1905,6 +2154,7 @@ module TomitaFix
     step_e_steel
     step_f_roof
     step_g_roof_steel
+    step_h_review
     step_b_floor_tags
     UI.messagebox("修正が完了しました。\n詳細は Ruby コンソールのログを確認してください。\n" \
                   "元に戻す場合は [編集]→[元に戻す] を、実行された STEP の数だけ押してください。")
