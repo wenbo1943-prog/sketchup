@@ -48,7 +48,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-06 v10（STEP A/C/D/E/F/G/H/I/B）'.freeze
+  VERSION = '2026-10-06 v10.1（STEP A/C/D/E/F/G/H/I/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -2269,14 +2269,14 @@ module TomitaFix
   end
 
   # 西の妻面（棟より南）にあるガラスの面を探し、(Y, Z) の多角形（mm）を polys に入れる
-  def gable_glass_faces(ents, tr, inh, polys)
+  #   範囲（GLASS_SEARCH）に一部でも掛かる面を拾い、格子は範囲内だけに作る。diag には範囲内の全ての面（材料別）を入れる（見つからないときの確認用）
+  def gable_glass_faces(ents, tr, inh, polys, diag = Hash.new { |h, k| h[k] = [] })
     q = GLASS_SEARCH
     ents.each do |e|
       if container?(e)
         next if e.name.start_with?('外構') || e.name == GLASS_LATTICE_GROUP
-        gable_glass_faces(e.definition.entities, tr * e.transformation, e.material || inh, polys)
+        gable_glass_faces(e.definition.entities, tr * e.transformation, e.material || inh, polys, diag)
       elsif e.is_a?(Sketchup::Face)
-        next unless glass_mat?(e.material || e.back_material || inh)
         n = e.normal.transform(tr)
         next if n.length < 1e-9
         n.normalize!
@@ -2285,10 +2285,20 @@ module TomitaFix
         xs = pts.map { |p| p.x.to_mm }
         ys = pts.map { |p| p.y.to_mm }
         zs = pts.map { |p| p.z.to_mm }
-        next unless xs.min >= q[:x0] && xs.max <= q[:x1] && ys.min >= q[:y0] && ys.max <= q[:y1] && zs.min >= q[:z0]
+        next unless xs.min >= q[:x0] && xs.max <= q[:x1] && ys.max > q[:y0] && ys.min < q[:y1] && zs.max > q[:z0] + 200
+        m = e.material || e.back_material || inh
+        diag[m ? "#{m.name}（透明度 #{(m.alpha || 1.0).round(2)}）" : '（材料なし）'] << [ys.minmax, zs.minmax, xs.min]
+        next unless glass_mat?(m)
         polys << pts.map { |p| [p.y.to_mm, p.z.to_mm] }
         @glass_xmin = [@glass_xmin || xs.min, xs.min].min
       end
+    end
+    diag
+  end
+
+  def visible_path?(*ents)
+    ents.all? do |e|
+      (!e.respond_to?(:hidden?) || !e.hidden?) && (!e.respond_to?(:layer) || e.layer.nil? || !e.layer.respond_to?(:visible?) || e.layer.visible?)
     end
   end
 
@@ -2352,19 +2362,21 @@ module TomitaFix
     find_named(GLASS_LATTICE_GROUP).each { |g, _| g.erase! if g.valid? }
     polys = []
     @glass_xmin = nil
-    gable_glass_faces(model.entities, Geom::Transformation.new, nil, polys)
+    diag = gable_glass_faces(model.entities, Geom::Transformation.new, nil, polys)
     # 格子はガラスの外側に置く（ガラスが既存の格子の面より外にある場合は、ガラスの 10 外へずらす）
     lat_x = LAT_X
     lat_x = [@glass_xmin - 10 - (LAT_X[1] - LAT_X[0]), @glass_xmin - 10] if @glass_xmin && @glass_xmin < LAT_X[1] + 10
     if polys.empty?
-      log << '（スキップ）西の妻面（棟より南）にガラスの面が見つかりません'
+      log << '（スキップ）西の妻面（棟より南）にガラスの面が見つかりません。範囲内の面（材料別）:'
+      diag.each { |k, v| log << "    #{k}: #{v.size}面 例 Y#{v.first[0].map(&:round)} Z#{v.first[1].map(&:round)} X#{v.first[2].round}" }
     else
       wood = mat_prefix('05_木格子') || mat_prefix('05_')
-      # 既存の木格子（同じ面にある縦の部材）と重ならないようにする
+      # 既存の木格子（同じ面にある縦の部材）と重ならないようにする。非表示（タグを隠している等）の格子は数えない
       existing = []
       find_named('妻面 木格子・欄間').each do |lg_, ltr|
+        next unless visible_path?(lg_)
         lg_.definition.entities.each do |e|
-          next unless container?(e)
+          next unless container?(e) && visible_path?(e)
           mn, mx = world_bb_mm(e, ltr)
           existing << [mn, mx] if mn && mn[0] < LAT_X[1] + 5 && mx[0] > LAT_X[0] - 5
         end
@@ -2372,7 +2384,8 @@ module TomitaFix
       lg = host.add_group
       lg.name = GLASS_LATTICE_GROUP
       lg.transformation = bld.transformation.inverse if bld
-      ys = polys.flatten(1).map(&:first)
+      q = GLASS_SEARCH
+      ys = polys.flatten(1).map(&:first).map { |y| y.clamp(q[:y0], q[:y1]) }
       k = ((ys.min - LAT_Y0) / LAT_PITCH).floor
       n_lat = 0
       n_skip = 0
@@ -2381,7 +2394,8 @@ module TomitaFix
         yb = ya + LAT_W
         break if ya > ys.max
         k += 1
-        ivs = polys.flat_map { |pl| intersect_intervals(y_intervals(pl, ya + 1), y_intervals(pl, yb - 1)) }
+        next if ya < q[:y0] || yb > q[:y1]
+        ivs = polys.flat_map { |pl| intersect_intervals(intersect_intervals(y_intervals(pl, ya + 1), y_intervals(pl, yb - 1)), [[q[:z0] + 100, 1e9]]) }
         merge_intervals(ivs).each do |z0, z1|
           next if z1 - z0 < 200
           if existing.any? { |mn, mx| mn[1] < yb - 5 && mx[1] > ya + 5 && [mx[2], z1].min - [mn[2], z0].max > 100 }

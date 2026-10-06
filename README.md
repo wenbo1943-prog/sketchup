@@ -7,7 +7,7 @@
 
 | ファイル | 内容 |
 |---|---|
-| `tomita_fix_20261005.rb` | SketchUp で実行する修正スクリプト（STEP A／C／D／E／F／G／H／I／B、v10） |
+| `tomita_fix_20261005.rb` | SketchUp で実行する修正スクリプト（STEP A／C／D／E／F／G／H／I／B、v10.1） |
 | `check_rooms_after.png` | 実行後の 1F〜3F 平面を DWG に重ねた確認図（追加する壁＝赤、扉＝緑） |
 | `check_south_void_stair.png` | 南側吹抜け・南東階段の詳細確認図 |
 | `check_ceilings.png` | 天井の範囲（1F〜3F）と高さ断面の確認図 |
