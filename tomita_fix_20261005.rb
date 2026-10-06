@@ -48,7 +48,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-06 v10.1（STEP A/C/D/E/F/G/H/I/B）'.freeze
+  VERSION = '2026-10-06 v10.2（STEP A/C/D/E/F/G/H/I/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -2228,11 +2228,13 @@ module TomitaFix
   SIGN_LOGO_BASE_Z = 16_000.0 # 市章の下端
   # 西の妻面のガラス部（棟より南）の木格子: 既存の妻面の木格子と同じ寸法・並び
   GLASS_LATTICE_GROUP = '妻面 ガラス部 木格子'.freeze
-  LAT_X = [-405.0, -300.0].freeze # 見込 105（既存の木格子と同じ面）
+  LAT_D = 105.0                   # 見込（既存の木格子と同じ）
+  LAT_GAP = 10.0                  # ガラスの外面と格子のすき間
   LAT_W = 44.0                    # 見付
   LAT_PITCH = 180.0
   LAT_Y0 = -2.0                   # 既存の木格子の並び（Y = −2 + 180×k）
-  GLASS_SEARCH = { x0: -500.0, x1: -200.0, y0: 9_000.0, y1: 29_000.0, z0: 13_900.0 }.freeze
+  # 探す範囲: 西の妻面の線（X −405）から、3F の西側の壁の線（X 4,850）まで。棟の少し北（Y 31,000）まで
+  GLASS_SEARCH = { x0: -500.0, x1: 5_200.0, y0: 9_000.0, y1: 31_000.0, z0: 13_900.0 }.freeze
 
   SIGN_MATS = {
     logo: ['TF_サイン_高槻市章_ネイビー #1E2B57', [30, 43, 87]],
@@ -2286,9 +2288,12 @@ module TomitaFix
         ys = pts.map { |p| p.y.to_mm }
         zs = pts.map { |p| p.z.to_mm }
         next unless xs.min >= q[:x0] && xs.max <= q[:x1] && ys.max > q[:y0] && ys.min < q[:y1] && zs.max > q[:z0] + 200
-        m = e.material || e.back_material || inh
-        diag[m ? "#{m.name}（透明度 #{(m.alpha || 1.0).round(2)}）" : '（材料なし）'] << [ys.minmax, zs.minmax, xs.min]
-        next unless glass_mat?(m)
+        # 表・裏のどちらかがガラスならガラスの面とみなす（裏面だけガラスにした面もある）
+        fm = e.material || inh
+        bm = e.back_material || inh
+        label = [fm, bm].uniq.map { |m| m ? "#{m.name}（透明度 #{(m.alpha || 1.0).round(2)}）" : '（材料なし）' }.join(' / 裏 ')
+        diag[label] << [ys.minmax, zs.minmax, xs.min]
+        next unless glass_mat?(fm) || glass_mat?(bm)
         polys << pts.map { |p| [p.y.to_mm, p.z.to_mm] }
         @glass_xmin = [@glass_xmin || xs.min, xs.min].min
       end
@@ -2363,9 +2368,8 @@ module TomitaFix
     polys = []
     @glass_xmin = nil
     diag = gable_glass_faces(model.entities, Geom::Transformation.new, nil, polys)
-    # 格子はガラスの外側に置く（ガラスが既存の格子の面より外にある場合は、ガラスの 10 外へずらす）
-    lat_x = LAT_X
-    lat_x = [@glass_xmin - 10 - (LAT_X[1] - LAT_X[0]), @glass_xmin - 10] if @glass_xmin && @glass_xmin < LAT_X[1] + 10
+    # 格子はガラスの外面（西側）に、すき間 10 で付ける
+    lat_x = @glass_xmin ? [@glass_xmin - LAT_GAP - LAT_D, @glass_xmin - LAT_GAP] : nil
     if polys.empty?
       log << '（スキップ）西の妻面（棟より南）にガラスの面が見つかりません。範囲内の面（材料別）:'
       diag.each { |k, v| log << "    #{k}: #{v.size}面 例 Y#{v.first[0].map(&:round)} Z#{v.first[1].map(&:round)} X#{v.first[2].round}" }
@@ -2378,7 +2382,7 @@ module TomitaFix
         lg_.definition.entities.each do |e|
           next unless container?(e) && visible_path?(e)
           mn, mx = world_bb_mm(e, ltr)
-          existing << [mn, mx] if mn && mn[0] < LAT_X[1] + 5 && mx[0] > LAT_X[0] - 5
+          existing << [mn, mx] if mn && mn[0] < lat_x[1] + 50 && mx[0] > lat_x[0] - 50
         end
       end
       lg = host.add_group
@@ -2406,7 +2410,7 @@ module TomitaFix
           n_lat += 1
         end
       end
-      log << "西の妻面のガラス部（#{polys.size}面）に木の縦格子 #{n_lat}本（#{LAT_W.round}×#{(LAT_X[1] - LAT_X[0]).round} @#{LAT_PITCH.round}、#{wood.name}）" \
+      log << "西の妻面のガラス部（#{polys.size}面、X #{@glass_xmin.round}）の外面に木の縦格子 #{n_lat}本（#{LAT_W.round}×#{LAT_D.round} @#{LAT_PITCH.round}、#{wood.name}）" \
              "#{n_skip.positive? ? "。既存の格子と重なる #{n_skip}か所は省略" : ''}"
     end
 
