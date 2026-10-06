@@ -48,7 +48,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-06 v10.2（STEP A/C/D/E/F/G/H/I/B）'.freeze
+  VERSION = '2026-10-06 v10.3（STEP A/C/D/E/F/G/H/I/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -2231,7 +2231,7 @@ module TomitaFix
   LAT_D = 105.0                   # 見込（既存の木格子と同じ）
   LAT_GAP = 10.0                  # ガラスの外面と格子のすき間
   LAT_W = 44.0                    # 見付
-  LAT_PITCH = 180.0
+  LAT_PITCH = 360.0               # 既存の木格子（@180）の1本おき（量を半分に）
   LAT_Y0 = -2.0                   # 既存の木格子の並び（Y = −2 + 180×k）
   # 探す範囲: 西の妻面の線（X −405）から、3F の西側の壁の線（X 4,850）まで。棟の少し北（Y 31,000）まで
   GLASS_SEARCH = { x0: -500.0, x1: 5_200.0, y0: 9_000.0, y1: 31_000.0, z0: 13_900.0 }.freeze
