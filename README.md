@@ -19,11 +19,13 @@
 ## 実行手順
 
 1. 元の .skp を別名で保存し、バックアップを残す
-2. `tomita_fix_20261005.rb` を日本語を含まないフォルダ（例 `C:/temp`）に置く
-3. SketchUp で .skp を開き、[拡張機能] → [Ruby コンソール] で次を実行する
+2. `tomita_fix_20261005.rb` をダウンロードする（`C:/Users/zhang/Downloads` に保存される前提）
+3. SketchUp で .skp を開き、[拡張機能] → [Ruby コンソール] で次の1行を貼り付けて Enter
    ```ruby
-   load 'C:/temp/tomita_fix_20261005.rb'
+   f = Dir.glob('C:/Users/zhang/Downloads/tomita_fix*').max_by { |x| File.mtime(x) }; puts f; load f
    ```
+   - 同じ名前のファイルが「(1)」「(2)」付きで増えても、いちばん新しく保存されたものを読み込みます。
+   - 1行目にファイル名、2行目に「TomitaFix 2026-10-06 v8.1（…）を読み込みました」と出れば正しいファイルです。
 4. STEP A → C → D → E → F → G → H → B の順に自動で実行されます。ログは Ruby コンソールに出ます。
    - 実行済みの STEP A・C は自動でスキップされます。
      前回のスクリプトを実行済みのモデルに新しいスクリプトを読み込むと、STEP D と B だけが実行されます。

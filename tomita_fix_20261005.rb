@@ -23,9 +23,8 @@
 #
 # 使い方:
 #   1. 元の .skp を必ず別名でバックアップしてから開く
-#   2. [拡張機能]→[Ruby コンソール] を開き、次を入力して Enter
-#        load 'C:/temp/tomita_fix_20261005.rb'
-#      ※ このファイルは日本語を含まないフォルダ（例: C:/temp）に置くと確実です
+#   2. [拡張機能]→[Ruby コンソール] を開き、次の1行を貼り付けて Enter（ダウンロードフォルダの最新のファイルを読み込む）
+#        f = Dir.glob('C:/Users/zhang/Downloads/tomita_fix*').max_by { |x| File.mtime(x) }; puts f; load f
 #      （このファイルを読み込むと STEP A → C → D → E → F → G → H → B の順で自動実行されます。
 #        実行済みの STEP A・C は自動でスキップします）
 #      個別に実行したい場合は、先頭の AUTO_RUN を false にして読み込み後に
