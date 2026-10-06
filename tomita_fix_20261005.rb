@@ -16,7 +16,8 @@
 #          吹抜けの手摺（エキスパンドメタル調）、家具の配置（田園調布せせらぎ館を参考）
 #  STEP F  軒と屋根（大屋根は薄い屋根板＋細い垂木＋面戸、下屋は小さな持ち出し材とシャンパングレーの鉄骨）
 #  STEP G  屋根まわりの鉄骨（妻側の登り梁を木製に、南北の軒の桁・登り梁を柱の内面より奥へ）
-#  STEP H  上司の意見（大屋根の軒天を明るく、1階の軒の柱を木の丸柱に、ブリッジ・歩道橋の床と手摺、EXP.J）
+#  STEP H  上司の意見（大屋根の軒天を明るく、1階の軒の柱を木の丸柱に、ブリッジ・歩道橋の床と手摺、EXP.J、下屋の梁と垂木の納まり）
+#  STEP I  サイン（西の妻面に Takatsuki Common Ground と高槻市章）
 #  STEP B  階ごとのタグ（レイヤー）を作成し、全要素を 1F/2F/3F/RF/複数階 に振り分け
 #          - 既存の「部位別タグ」（01_構造… 等）は親グループ側に残すので、
 #            部位別・階別のどちらでも表示/非表示を切り替えられる
@@ -25,11 +26,11 @@
 #   1. 元の .skp を必ず別名でバックアップしてから開く
 #   2. [拡張機能]→[Ruby コンソール] を開き、次の1行を貼り付けて Enter（ダウンロードフォルダの最新のファイルを読み込む）
 #        f = Dir.glob('C:/Users/zhang/Downloads/tomita_fix*').max_by { |x| File.mtime(x) }; puts f; load f
-#      （このファイルを読み込むと STEP A → C → D → E → F → G → H → B の順で自動実行されます。
+#      （このファイルを読み込むと STEP A → C → D → E → F → G → H → I → B の順で自動実行されます。
 #        実行済みの STEP A・C は自動でスキップします）
 #      個別に実行したい場合は、先頭の AUTO_RUN を false にして読み込み後に
 #        TomitaFix.step_a_south_void / step_c_rooms / step_d_ceilings / step_e_steel / step_f_roof /
-#        step_g_roof_steel / step_h_review / step_b_floor_tags
+#        step_g_roof_steel / step_h_review / step_i_sign / step_b_floor_tags
 #   3. 結果が気に入らなければ [編集]→[元に戻す] を、実行された STEP の数だけ押すと元に戻ります
 #
 # 座標の根拠（すべて mm、モデル原点 = 通り芯 X0/Y0・1FL±0、X=東、Y=北）:
@@ -47,7 +48,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-06 v8.1（STEP A/C/D/E/F/G/H/B）'.freeze
+  VERSION = '2026-10-06 v9（STEP A/C/D/E/F/G/H/I/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -1806,6 +1807,7 @@ module TomitaFix
   #   H4. ブリッジの手摺を木目調アルミの縦格子（NS8403 の色）に作り直す
   #   H5. ブリッジと歩道橋本体の取り合いに EXP.J カバー（床・手摺部）
   #   H6. 歩道橋本体の手摺をアルミ（グレー）に
+  #   H0/H7. 下屋の鼻先の梁を垂木の下まで下げ（垂木が梁に載る）、角部に隅木と配付垂木を追加
   #   ・何度実行しても同じ結果になる（作ったグループは名前で探して作り直す）
   # ===========================================================================
   H_MATS = {
@@ -1877,6 +1879,26 @@ module TomitaFix
     end
   end
 
+  # 下屋の屋根板（グループ）の下面: 点列・平面の高さ関数・軒先側／壁側の辺（下屋グループの座標）
+  def slab_frame(slab)
+    t = slab.transformation
+    bot = slab.definition.entities.grep(Sketchup::Face).min_by { |f| f.normal.transform(t).z }
+    return nil unless bot
+    nrm = bot.normal.transform(t)
+    nrm.normalize!
+    return nil unless nrm.z < -0.5
+    ps = bot.outer_loop.vertices.map { |v| v.position.transform(t) }
+    p0 = ps.first
+    zmax = ps.map(&:z).max
+    zmin = ps.map(&:z).min
+    {
+      poly: ps.map { |q| [q.x.to_mm, q.y.to_mm] },
+      z_at: ->(x, y) { p0.z.to_mm - (nrm.x * (x - p0.x.to_mm) + nrm.y * (y - p0.y.to_mm)) / nrm.z },
+      up: ps.select { |q| (q.z - zmax).abs < 0.05 },
+      lo: ps.select { |q| (q.z - zmin).abs < 0.05 }
+    }
+  end
+
   def h_mat(key)
     name, rgb = H_MATS[key]
     m = model.materials[name] || model.materials.add(name)
@@ -1929,6 +1951,34 @@ module TomitaFix
     old = sents.select { |e| e.is_a?(Sketchup::Group) && e.name == EAVE_COL_GROUP }
     sents.erase_entities(old) unless old.empty?
     eave_m = model.materials.find { |m| m.name.start_with?('TF_下屋_鉄骨') }
+
+    # --- H0. 垂木が梁の上に載るように、下屋の鼻先の梁を下げる（梁の上端 = 垂木の下端） ---
+    slabs = sents.grep(Sketchup::Group).select { |g| g.name.start_with?('下屋 (') }.map { |g| slab_frame(g) }.compact
+    beams = []
+    lowered = 0
+    sents.grep(Sketchup::Group).each do |g|
+      next if g.name.start_with?('下屋 ') || g.name == EAVE_COL_GROUP
+      bb = g.bounds
+      next if bb.empty?
+      bmn = bb.min
+      bmx = bb.max
+      dx = (bmx.x - bmn.x).to_mm
+      dy = (bmx.y - bmn.y).to_mm
+      dz = (bmx.z - bmn.z).to_mm
+      next unless dz < 600 && [dx, dy].max > 2_000 && [dx, dy].min <= 300 && bmn.z.to_mm > 3_000 && bmx.z.to_mm < 5_200
+      beams << g
+      cx = ((bmn.x + bmx.x) / 2).to_mm
+      cy = ((bmn.y + bmx.y) / 2).to_mm
+      sl = slabs.find { |f| point_in_poly?(f[:poly], cx, cy) }
+      next unless sl # 下屋の屋根の外（建物側の梁）は対象外
+      diff = bmx.z.to_mm - (sl[:z_at].call(cx, cy) - EAVE_RAFTER_D)
+      next unless diff > 1
+      g.transformation = Geom::Transformation.translation(Geom::Vector3d.new(0, 0, -diff.mm)) * g.transformation
+      lowered += 1
+    end
+    beam_bbs = beams.map { |g| world_bb_mm(g, str) }.compact
+    log << "下屋の鼻先の梁 #{lowered}本を、垂木（#{EAVE_RAFTER_W.round}×#{EAVE_RAFTER_D.round}）の下端まで下げた（垂木が梁の上に載る）"
+
     cols = []
     sents.grep(Sketchup::Group).each do |g|
       mn, mx = world_bb_mm(g, str)
@@ -1955,6 +2005,12 @@ module TomitaFix
     keep.each do |g, mn, mx|
       cx = (mn[0] + mx[0]) / 2.0
       cy = (mn[1] + mx[1]) / 2.0
+      # 柱の上端は、上に載る梁の下端に合わせる（H0 で梁を下げた分だけ短くなる）
+      above = beam_bbs.find do |bmn, bmx|
+        cx.between?(bmn[0] - 150, bmx[0] + 150) && cy.between?(bmn[1] - 150, bmx[1] + 150) &&
+          bmn[2] <= mx[2] + 50 && bmn[2] >= mx[2] - 400
+      end
+      mx = [mx[0], mx[1], above[0][2]] if above
       # 中の鉄骨を鋼管 φ139.8 に作り直す（柱の位置・高さはそのまま）
       core_m = g.definition.entities.grep(Sketchup::Face).first&.material || eave_m
       unique!(g)
@@ -1967,6 +2023,68 @@ module TomitaFix
     end
     log << "1階の軒の柱 #{keep.size}本を木の丸柱（φ#{EAVE_COL_D}、#{wood.name}）に。中の鉄骨は鋼管 φ#{EAVE_CORE_D} に置き換え、" \
            "足元 #{EAVE_COL_FOOT.round} は鉄骨を見せる。重なっていた柱 #{dup.size}本を削除"
+
+    # --- H7. 下屋の角部（隅棟の下）に配付垂木と隅木を追加 ---
+    old = sents.select { |e| e.is_a?(Sketchup::Group) && ['下屋 垂木(角部)', '下屋 隅木'].include?(e.name) }
+    sents.erase_entities(old) unless old.empty?
+    jack = 0
+    hips = {}
+    zd = Geom::Vector3d.new(0, 0, EAVE_RAFTER_D.mm)
+    slabs.each do |sl|
+      up = sl[:up]
+      lo = sl[:lo]
+      next if up.size < 2 || lo.size < 2
+      u = up[0].vector_to(up[1]); u.z = 0; u.normalize!
+      proj = ->(q) { q.x * u.x + q.y * u.y }
+      ua = up.map(&proj).minmax
+      la = lo.map(&proj).minmax
+      t0 = [ua[0], la[0]].max
+      t1 = [ua[1], la[1]].min
+      next if (t1 - t0).to_mm < 300
+      d = up[0].vector_to(lo[0]); d = d - Geom::Vector3d.new(u.x * d.dot(u), u.y * d.dot(u), 0) # 斜面方向（軒先へ）
+      dlen = d.length.to_mm
+      len_t = (t1 - t0).to_mm
+      step = len_t / [(len_t / EAVE_RAFTER_PITCH).round, 1].max # STEP F の垂木と同じ間隔
+      uw = Geom::Vector3d.new(u.x * EAVE_RAFTER_W.mm, u.y * EAVE_RAFTER_W.mm, 0)
+      # 角部の三角形: 低い側は軒先 la[0]〜壁側 ua[0]、高い側は壁側 ua[1]〜軒先 la[1]
+      [[:low, la[0], ua[0]], [:high, ua[1], la[1]]].each do |side, a, b|
+        next unless (b - a).to_mm > EAVE_RAFTER_W
+        # 隅木（隅棟の下、軒先の角から壁側の角まで）。隣の屋根と共有するので1本だけ
+        e_pt = side == :low ? lo.min_by(&proj) : lo.max_by(&proj)
+        w_pt = side == :low ? up.min_by(&proj) : up.max_by(&proj)
+        # 隣の屋根の隅棟とは端点が数十mm ずれることがあるので、軒先の角（±300）で同じ隅木とみなす
+        key = [e_pt.x.to_mm, e_pt.y.to_mm]
+        unless hips.keys.any? { |k| (k[0] - key[0]).abs < 300 && (k[1] - key[1]).abs < 300 }
+          hips[key] = true
+          hv = e_pt.vector_to(w_pt)
+          wv = Geom::Vector3d.new(-hv.y, hv.x, 0); wv.normalize!
+          half = Geom::Vector3d.new(wv.x * (EAVE_RAFTER_W / 2).mm, wv.y * (EAVE_RAFTER_W / 2).mm, 0)
+          b0 = e_pt.offset(zd.reverse)
+          prof = [b0.offset(half.reverse), b0.offset(half), b0.offset(half).offset(zd), b0.offset(half.reverse).offset(zd)]
+          hg = sents.add_group
+          hg.name = '下屋 隅木'
+          prism(hg.entities, prof, hv, eave_m)
+        end
+        # 配付垂木（軒先から隅木まで。STEP F の垂木の並びを角部へ延ばす）
+        i = 1
+        while i < 100
+          tc = side == :low ? t0 - ((i - 0.5) * step).mm : t1 + ((i - 0.5) * step).mm
+          frac = side == :low ? (tc - a) / (b - a) : (b - tc) / (b - a) # 垂木の長さの割合（壁側の角で1、軒先の角で0）
+          break if frac * dlen < 300
+          sh = 1.0 - frac
+          base = up[0].offset(Geom::Vector3d.new(u.x * (tc - proj.call(up[0]) - (EAVE_RAFTER_W / 2).mm), u.y * (tc - proj.call(up[0]) - (EAVE_RAFTER_W / 2).mm), 0))
+          base = base.offset(Geom::Vector3d.new(d.x * sh, d.y * sh, d.z * sh))
+          o = base.offset(zd.reverse)
+          prof = [o, o.offset(uw), o.offset(uw).offset(zd), o.offset(zd)]
+          jg = sents.add_group
+          jg.name = '下屋 垂木(角部)'
+          prism(jg.entities, prof, Geom::Vector3d.new(d.x * frac, d.y * frac, d.z * frac), eave_m)
+          jack += 1
+          i += 1
+        end
+      end
+    end
+    log << "下屋の角部に隅木 #{hips.size}本と配付垂木 #{jack}本を追加（#{EAVE_RAFTER_W.round}×#{EAVE_RAFTER_D.round}、垂木と同じ間隔）"
 
     # --- H3. 床を木目調塩ビシート NS8402 に ---
     floor_m = h_mat(:floor)
@@ -2080,6 +2198,104 @@ module TomitaFix
   rescue StandardError => e
     model.abort_operation
     UI.messagebox("STEP H でエラーのため中止しました（モデルは変更されていません）:\n#{e.message}")
+    raise
+  end
+
+  # ===========================================================================
+  # STEP I: サイン（西の妻面に「Takatsuki Common Ground」と高槻市章）
+  #   ・上司のスケッチ（10/6）の位置: 棟より北側の妻面、3F の窓の上に文字、その上に市章
+  #   ・切り文字（厚さ30）として妻面の木格子の外側に付ける。何度実行しても作り直すだけ
+  # ===========================================================================
+  SIGN_GROUP = 'サイン（Takatsuki Common Ground・高槻市章）'.freeze
+  SIGN_TEXT = 'Takatsuki Common Ground'.freeze
+  SIGN_FONT = 'Arial'.freeze
+  SIGN_TEXT_H = 1_300.0       # 文字の高さ（大文字）
+  SIGN_TEXT_BASE_Z = 14_400.0 # 文字の下端（ベースライン）。妻面の下端 14,000 の上
+  SIGN_TEXT_NORTH_Y = 51_000.0 # 文字の北端（左端）。屋根の下端より下に収まる位置
+  SIGN_X = -415.0             # 妻面の木格子の外面（X −405）の外側
+  SIGN_DEPTH = 30.0           # 切り文字の厚さ
+  SIGN_LOGO_H = 3_300.0       # 市章の高さ
+  SIGN_LOGO_CY = 36_000.0     # 市章の中心（Y）
+  SIGN_LOGO_BASE_Z = 16_000.0 # 市章の下端
+  SIGN_MATS = {
+    logo: ['TF_サイン_高槻市章_ネイビー #1E2B57', [30, 43, 87]],
+    text: ['TF_サイン_文字_チャコール #2B2B2B', [43, 43, 43]]
+  }.freeze
+  # 高槻市章の輪郭（市章の画像をトレースした多角形。単位は画像のピクセル、左下原点、上向き）
+  LOGO_PX_W = 487.0
+  LOGO_PX_H = 562.7
+  LOGO_OUTER =
+    [[243.5, 562.7], [297.5, 469.9], [452.6, 469.2], [321.4, 326.2], [345.5, 312.3], [371.5, 294.4],
+     [394.5, 275.4], [420.7, 249.2], [442.6, 222.2], [458.8, 198.2], [476.8, 165.2], [487.0, 141.2],
+     [463.5, 143.0], [441.5, 146.9], [422.5, 151.9], [399.5, 159.9], [371.5, 172.8], [353.5, 183.0],
+     [334.5, 196.0], [317.5, 210.0], [316.6, 209.2], [318.0, 183.2], [317.0, 163.2], [311.0, 133.2],
+     [301.8, 103.2], [289.6, 73.2], [276.7, 48.2], [260.6, 22.2], [243.5, 0.0], [229.2, 18.2], [211.4, 46.2],
+     [196.5, 75.2], [184.5, 105.2], [177.4, 128.2], [170.5, 160.2], [169.2, 174.2], [169.9, 210.2],
+     [152.5, 196.1], [131.5, 181.9], [109.5, 169.8], [87.5, 160.0], [64.5, 151.9], [45.5, 146.9],
+     [23.5, 143.0], [0.0, 141.2], [10.2, 165.2], [26.3, 195.2], [44.3, 222.2], [65.4, 248.2], [88.0, 271.2],
+     [111.5, 291.3], [136.6, 309.2], [165.9, 327.2], [34.5, 469.2], [189.5, 469.8]].freeze
+  LOGO_HOLES = [
+    [[164.5, 422.1], [164.5, 420.8], [218.5, 388.1], [227.5, 400.7], [258.5, 400.9], [268.5, 388.0],
+     [323.4, 421.2], [322.5, 422.2]],
+    [[229.5, 233.7], [228.6, 232.2], [229.0, 220.2], [232.2, 198.2], [238.0, 177.2], [243.5, 164.5],
+     [249.7, 179.2], [254.8, 198.2], [258.6, 232.2], [256.5, 233.8]]
+  ].freeze
+
+  # 西の妻面の座標系: ローカル X → 南向き（−Y）、Y → 上、Z → 西（見る人の方）
+  def west_gable_axes(y_left, z_base)
+    Geom::Transformation.axes(pt(SIGN_X, y_left, z_base), Geom::Vector3d.new(0, -1, 0),
+                              Geom::Vector3d.new(0, 0, 1), Geom::Vector3d.new(-1, 0, 0))
+  end
+
+  def sign_mat(key)
+    name, rgb = SIGN_MATS[key]
+    m = model.materials[name] || model.materials.add(name)
+    m.color = Sketchup::Color.new(*rgb)
+    m
+  end
+
+  def step_i_sign
+    model.start_operation('サイン（Takatsuki Common Ground・高槻市章）', true)
+    log = []
+    find_named(SIGN_GROUP).each { |g, _| g.erase! if g.valid? }
+    bld = model.entities.find { |e| container?(e) && e.name.start_with?(BUILDING_PREFIX) }
+    host = bld ? bld.definition.entities : model.entities
+    sg = host.add_group
+    sg.name = SIGN_GROUP
+    sg.transformation = bld.transformation.inverse if bld
+
+    # 文字（3D テキスト）
+    tg = sg.entities.add_group
+    tg.name = "文字 #{SIGN_TEXT}"
+    tg.entities.add_3d_text(SIGN_TEXT, TextAlignLeft, SIGN_FONT, false, false, SIGN_TEXT_H.mm, 0.0, 0.0, true, SIGN_DEPTH.mm)
+    len = tg.bounds.width.to_mm
+    tg.transformation = west_gable_axes(SIGN_TEXT_NORTH_Y, SIGN_TEXT_BASE_Z)
+    tg.material = sign_mat(:text)
+    log << "文字「#{SIGN_TEXT}」（#{SIGN_FONT}、高さ #{SIGN_TEXT_H.round}、長さ 約#{len.round}）: Y #{SIGN_TEXT_NORTH_Y.round}〜#{(SIGN_TEXT_NORTH_Y - len).round}、下端 Z #{SIGN_TEXT_BASE_Z.round}"
+
+    # 高槻市章（トレースした輪郭を面にして厚さを付ける）
+    lg = sg.entities.add_group
+    lg.name = '高槻市章'
+    sc = SIGN_LOGO_H / LOGO_PX_H
+    to_pts = ->(poly) { poly.map { |x, y| pt(x * sc, y * sc, 0) } }
+    face = lg.entities.add_face(to_pts.call(LOGO_OUTER))
+    LOGO_HOLES.each do |h|
+      hf = lg.entities.add_face(to_pts.call(h))
+      hf.erase! if hf && hf.valid?
+    end
+    face.reverse! if face.normal.z < 0
+    face.pushpull(SIGN_DEPTH.mm)
+    w = LOGO_PX_W * sc
+    lg.transformation = west_gable_axes(SIGN_LOGO_CY + w / 2, SIGN_LOGO_BASE_Z)
+    lg.material = sign_mat(:logo)
+    log << "高槻市章（幅 #{w.round}×高さ #{SIGN_LOGO_H.round}）: 中心 Y #{SIGN_LOGO_CY.round}、下端 Z #{SIGN_LOGO_BASE_Z.round}"
+
+    model.commit_operation
+    puts "[STEP I 完了]\n  " + log.join("\n  ")
+    log
+  rescue StandardError => e
+    model.abort_operation
+    UI.messagebox("STEP I でエラーのため中止しました（モデルは変更されていません）:\n#{e.message}")
     raise
   end
 
@@ -2201,6 +2417,7 @@ module TomitaFix
     step_f_roof
     step_g_roof_steel
     step_h_review
+    step_i_sign
     step_b_floor_tags
     UI.messagebox("修正が完了しました。\n詳細は Ruby コンソールのログを確認してください。\n" \
                   "元に戻す場合は [編集]→[元に戻す] を、実行された STEP の数だけ押してください。")
