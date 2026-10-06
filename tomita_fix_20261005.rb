@@ -48,7 +48,7 @@
 Object.send(:remove_const, :TomitaFix) if defined?(TomitaFix)
 
 module TomitaFix
-  VERSION = '2026-10-06 v9.1（STEP A/C/D/E/F/G/H/I/B）'.freeze
+  VERSION = '2026-10-06 v10（STEP A/C/D/E/F/G/H/I/B）'.freeze
   AUTO_RUN = true
 
   # ---- 階の設定（mm） -------------------------------------------------------
@@ -1011,15 +1011,21 @@ module TomitaFix
       log << "（スキップ）「#{GABLE_GROUP}」なし"
     else
       g, = hits.first
-      unique!(g)
       earth = mat_prefix('03_外壁_生成り土壁')
-      n = 0
-      g.definition.entities.grep(Sketchup::Face).each do |f|
-        f.material = earth
-        f.back_material = earth
-        n += 1
+      faces = g.definition.entities.grep(Sketchup::Face)
+      # 一度土壁にしたモデル（土壁の面がある）では、後から手で変えた面（ガラス等）を戻さないよう何もしない
+      if model.get_attribute(MARK_DICT, 'gable_earth_done') || faces.any? { |f| f.material == earth }
+        model.set_attribute(MARK_DICT, 'gable_earth_done', true)
+        log << '妻面の壁は土壁に変更済みのためそのまま（手で変えた面は変更しない）'
+      else
+        unique!(g)
+        faces.each do |f|
+          f.material = earth
+          f.back_material = earth
+        end
+        model.set_attribute(MARK_DICT, 'gable_earth_done', true)
+        log << "妻面の壁 #{faces.size}面を土壁に変更"
       end
-      log << "妻面の壁 #{n}面を土壁に変更"
     end
 
     model.commit_operation
@@ -2202,7 +2208,7 @@ module TomitaFix
   end
 
   # ===========================================================================
-  # STEP I: サイン（西の妻面に「Takatsuki Common Ground」と高槻市章）
+  # STEP I: サイン（西の妻面に「Takatsuki Common Ground」と高槻市章）、西の妻面のガラス部の木格子
   #   ・上司のスケッチ（10/6）の位置: 棟より北側の妻面、3F の窓の上に文字、その上に市章
   #   ・切り文字（厚さ30）として妻面の木格子の外側に付ける。何度実行しても作り直すだけ
   # ===========================================================================
@@ -2220,6 +2226,14 @@ module TomitaFix
   SIGN_LOGO_H = 3_300.0       # 市章の高さ
   SIGN_LOGO_CY = 36_000.0     # 市章の中心（Y）
   SIGN_LOGO_BASE_Z = 16_000.0 # 市章の下端
+  # 西の妻面のガラス部（棟より南）の木格子: 既存の妻面の木格子と同じ寸法・並び
+  GLASS_LATTICE_GROUP = '妻面 ガラス部 木格子'.freeze
+  LAT_X = [-405.0, -300.0].freeze # 見込 105（既存の木格子と同じ面）
+  LAT_W = 44.0                    # 見付
+  LAT_PITCH = 180.0
+  LAT_Y0 = -2.0                   # 既存の木格子の並び（Y = −2 + 180×k）
+  GLASS_SEARCH = { x0: -500.0, x1: -200.0, y0: 9_000.0, y1: 29_000.0, z0: 13_900.0 }.freeze
+
   SIGN_MATS = {
     logo: ['TF_サイン_高槻市章_ネイビー #1E2B57', [30, 43, 87]],
     text: ['TF_サイン_文字_チャコール #2B2B2B', [43, 43, 43]]
@@ -2248,6 +2262,47 @@ module TomitaFix
   def west_gable_axes(y_left, z_base)
     Geom::Transformation.axes(pt(SIGN_X, y_left, z_base), Geom::Vector3d.new(0, -1, 0),
                               Geom::Vector3d.new(0, 0, 1), Geom::Vector3d.new(-1, 0, 0))
+  end
+
+  def glass_mat?(m)
+    m && ((m.alpha || 1.0) < 0.99 || m.name =~ /ガラス|glass/i)
+  end
+
+  # 西の妻面（棟より南）にあるガラスの面を探し、(Y, Z) の多角形（mm）を polys に入れる
+  def gable_glass_faces(ents, tr, inh, polys)
+    q = GLASS_SEARCH
+    ents.each do |e|
+      if container?(e)
+        next if e.name.start_with?('外構') || e.name == GLASS_LATTICE_GROUP
+        gable_glass_faces(e.definition.entities, tr * e.transformation, e.material || inh, polys)
+      elsif e.is_a?(Sketchup::Face)
+        next unless glass_mat?(e.material || e.back_material || inh)
+        n = e.normal.transform(tr)
+        next if n.length < 1e-9
+        n.normalize!
+        next unless n.x.abs > 0.99
+        pts = e.outer_loop.vertices.map { |v| v.position.transform(tr) }
+        xs = pts.map { |p| p.x.to_mm }
+        ys = pts.map { |p| p.y.to_mm }
+        zs = pts.map { |p| p.z.to_mm }
+        next unless xs.min >= q[:x0] && xs.max <= q[:x1] && ys.min >= q[:y0] && ys.max <= q[:y1] && zs.min >= q[:z0]
+        polys << pts.map { |p| [p.y.to_mm, p.z.to_mm] }
+        @glass_xmin = [@glass_xmin || xs.min, xs.min].min
+      end
+    end
+  end
+
+  # 接している区間をつなぐ
+  def merge_intervals(ivs)
+    out = []
+    ivs.sort.each do |a, b|
+      if out.any? && a <= out[-1][1] + 5
+        out[-1][1] = [out[-1][1], b].max
+      else
+        out << [a, b]
+      end
+    end
+    out
   end
 
   def sign_mat(key)
@@ -2292,6 +2347,54 @@ module TomitaFix
     lg.transformation = west_gable_axes(SIGN_LOGO_CY + w / 2, SIGN_LOGO_BASE_Z)
     lg.material = sign_mat(:logo)
     log << "高槻市章（幅 #{w.round}×高さ #{SIGN_LOGO_H.round}）: 中心 Y #{SIGN_LOGO_CY.round}、下端 Z #{SIGN_LOGO_BASE_Z.round}"
+
+    # --- I2. 西の妻面のガラス部に木の縦格子 ---
+    find_named(GLASS_LATTICE_GROUP).each { |g, _| g.erase! if g.valid? }
+    polys = []
+    @glass_xmin = nil
+    gable_glass_faces(model.entities, Geom::Transformation.new, nil, polys)
+    # 格子はガラスの外側に置く（ガラスが既存の格子の面より外にある場合は、ガラスの 10 外へずらす）
+    lat_x = LAT_X
+    lat_x = [@glass_xmin - 10 - (LAT_X[1] - LAT_X[0]), @glass_xmin - 10] if @glass_xmin && @glass_xmin < LAT_X[1] + 10
+    if polys.empty?
+      log << '（スキップ）西の妻面（棟より南）にガラスの面が見つかりません'
+    else
+      wood = mat_prefix('05_木格子') || mat_prefix('05_')
+      # 既存の木格子（同じ面にある縦の部材）と重ならないようにする
+      existing = []
+      find_named('妻面 木格子・欄間').each do |lg_, ltr|
+        lg_.definition.entities.each do |e|
+          next unless container?(e)
+          mn, mx = world_bb_mm(e, ltr)
+          existing << [mn, mx] if mn && mn[0] < LAT_X[1] + 5 && mx[0] > LAT_X[0] - 5
+        end
+      end
+      lg = host.add_group
+      lg.name = GLASS_LATTICE_GROUP
+      lg.transformation = bld.transformation.inverse if bld
+      ys = polys.flatten(1).map(&:first)
+      k = ((ys.min - LAT_Y0) / LAT_PITCH).floor
+      n_lat = 0
+      n_skip = 0
+      loop do
+        ya = LAT_Y0 + k * LAT_PITCH
+        yb = ya + LAT_W
+        break if ya > ys.max
+        k += 1
+        ivs = polys.flat_map { |pl| intersect_intervals(y_intervals(pl, ya + 1), y_intervals(pl, yb - 1)) }
+        merge_intervals(ivs).each do |z0, z1|
+          next if z1 - z0 < 200
+          if existing.any? { |mn, mx| mn[1] < yb - 5 && mx[1] > ya + 5 && [mx[2], z1].min - [mn[2], z0].max > 100 }
+            n_skip += 1
+            next
+          end
+          box(lg.entities, lat_x[0], ya, z0, lat_x[1], yb, z1, wood)
+          n_lat += 1
+        end
+      end
+      log << "西の妻面のガラス部（#{polys.size}面）に木の縦格子 #{n_lat}本（#{LAT_W.round}×#{(LAT_X[1] - LAT_X[0]).round} @#{LAT_PITCH.round}、#{wood.name}）" \
+             "#{n_skip.positive? ? "。既存の格子と重なる #{n_skip}か所は省略" : ''}"
+    end
 
     model.commit_operation
     puts "[STEP I 完了]\n  " + log.join("\n  ")
