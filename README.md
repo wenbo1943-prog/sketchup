@@ -18,6 +18,7 @@
 | `check_sign_eave.png` | 下屋の梁と垂木の納まり・角部の垂木、西の妻面のサインの確認パース（v9） |
 | `check_gable_glass_lattice.png` | 西の妻面のガラス部の木の縦格子の確認パース（v10.2） |
 | `check_exterior_261006.png` | 外構（261006 CAD）の確認パース（v11） |
+| `check_exterior_261006_plan.png` | 外構（261006 CAD）を領域に分けた平面図（v11） |
 
 ## 実行手順
 
